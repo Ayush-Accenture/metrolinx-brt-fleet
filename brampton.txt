@@ -1,0 +1,202 @@
+import traceback
+
+import pandas as pd
+
+from helpers.config import config, IS_MOCK_RUN
+import helpers.integrated_services, helpers.soti,helpers.utility
+from helpers.logger_module import logger
+
+
+logger.info(f'Mock Run: {IS_MOCK_RUN}')
+
+logger.info('Reading BRT Input Sheet')
+print(helpers.utility.get_latest_file_from_dir(config["BRT"]["FILEPATH"]))
+sheet = pd.read_excel(helpers.utility.get_latest_file_from_dir(config["BRT"]["FILEPATH"]))
+cols = sheet.iloc[(sheet.loc[sheet.iloc[:, 0] == 'Bus #'].index[0]),].to_list()
+sheet.columns = cols
+sheet = sheet.iloc[(sheet.loc[sheet.iloc[:, 0] == 'Bus #'].index[0] + 1):, :].reset_index(drop=True)
+sheet.rename({"Bus #": "VehicleToMove"}, inplace=True, errors='raise', axis=1)
+
+input_sheet = sheet[(sheet["Vehicle Status"] == "Off-Site (LTM)")]
+input_sheet.dropna(subset=['VehicleToMove'],inplace=True)
+logger.debug(f"Vehicles to move:{input_sheet.VehicleToMove}")
+
+########################################################################################################################
+#  BFTP
+#########################################################################################################################
+
+#TABFTPDevNameList
+bftps_in_input_file = []
+for vehicle in input_sheet.VehicleToMove:
+    bftps_in_input_file.extend(helpers.integrated_services.get_device_by_vehicleid(str(vehicle).strip().lstrip("0"), 3, 130, True))
+bftps_in_input_file = set(bftps_in_input_file)
+logger.debug(f"BFTPs in input file:{bftps_in_input_file}")
+
+
+# BFTPLTMDevicesNames
+bftps_in_ltm = helpers.integrated_services.get_ltm_devices(3, 130)
+logger.debug(f"BFTPs in LTM:{bftps_in_ltm}")
+
+bftps_that_require_no_movement = bftps_in_ltm.intersection(bftps_in_input_file)
+logger.debug(f"BFTPs that require no movement :{bftps_that_require_no_movement}")
+
+# BFTPsinTA
+bftps_to_move_to_ltm = bftps_in_input_file - bftps_in_ltm
+
+# BFTPsinLTM
+bftps_to_move_to_prod = bftps_in_ltm - bftps_in_input_file
+logger.debug(f"bftps to move to prod:{bftps_to_move_to_prod}")
+
+bftps_to_move_to_ltm = set(bftp.replace(config["COMMON"]["LTM_PREFIX"], "") for bftp in bftps_to_move_to_ltm)
+logger.debug(f"BFTPs to move to LTM:{bftps_to_move_to_ltm}")
+# BFTPProdDevicesNames
+
+bftps_in_prod = helpers.integrated_services.get_prod_devices(3, 130)
+logger.debug(f"BFTPs in prod:{bftps_in_prod}")
+
+IdentifiedBFTPs = bftps_to_move_to_ltm.intersection(bftps_in_prod)
+logger.debug(f'Identified BFTPs:{IdentifiedBFTPs}')
+
+UnIdentifiedBFTPs =  bftps_to_move_to_ltm - bftps_in_prod
+logger.debug(f'UnIdentified BFTPs:{UnIdentifiedBFTPs}')
+########################################################################################################################
+#  DCU
+########################################################################################################################
+
+# TADCUDevNameList
+dcus_in_input_file = []
+for vehicle in input_sheet.VehicleToMove:
+    dcus_in_input_file.extend(helpers.integrated_services.get_device_by_vehicleid(str(vehicle).strip().lstrip("0"),3, 136,True))
+dcus_in_input_file = set(dcus_in_input_file)
+logger.debug(f"DCUs in input file:{dcus_in_input_file}")
+# DCULTMDevicesNames
+
+dcus_in_ltm = helpers.integrated_services.get_ltm_devices(3, 136)
+logger.debug(f'DCUs in LTM:{dcus_in_ltm}')
+
+dcus_that_require_no_movement = dcus_in_ltm.intersection(dcus_in_input_file)
+logger.debug(f'DCUs that require no movement:{dcus_that_require_no_movement}')
+
+# DCUsinTA
+dcus_to_move_to_ltm = dcus_in_input_file - dcus_in_ltm
+
+# DCUsinLTM
+dcus_to_move_to_prod = dcus_in_ltm - dcus_in_input_file
+logger.debug(f"DCUs to move to Prod:{dcus_to_move_to_prod}")
+
+dcus_to_move_to_ltm = set(dcu.replace(config["COMMON"]["LTM_PREFIX"], "") for dcu in dcus_to_move_to_ltm)
+logger.debug(f"DCUs to move to LTM:{dcus_to_move_to_ltm}")
+
+# DCUProdDevicesNames
+dcus_in_prod = helpers.integrated_services.get_prod_devices(3, 136)
+logger.debug(f'DCUs in prod:{dcus_in_prod}')
+
+IdentifiedDCUs = dcus_to_move_to_ltm.intersection(dcus_in_prod)
+logger.debug(f'Identified DCUs:{IdentifiedDCUs}')
+
+UnIdentifiedDCUs = dcus_to_move_to_ltm - dcus_in_prod
+logger.debug(f'UnIdentified DCUs:{UnIdentifiedDCUs}')
+
+########################################################################################################################
+# MOVE TO LTM
+########################################################################################################################
+
+unmoved_to_ltm = []
+moved_to_ltm = []
+
+logger.info('Moving DCU Devices to LTM')
+for dcu in IdentifiedDCUs:
+    device_name, device_id = helpers.integrated_services.fetch_dev_id_and_name(dcu)
+    try:
+        logger.info(f'Moving {dcu} to LTM')
+        if None not in (device_name, device_id):
+            is_moved = helpers.integrated_services.move_device_to_ltm(device_id, "BRT", "DCU")
+            if is_moved:
+                is_renamed = helpers.soti.rename_device_with_script(device_id, config["COMMON"]["LTM_PREFIX"] + dcu)
+                moved_to_ltm.append(dcu)
+                logger.info(f"{dcu} moved to LTM")
+            else:
+                unmoved_to_ltm.append(dcu)
+                logger.info(f"{dcu} not moved to LTM")
+        else:
+            unmoved_to_ltm.append(dcu)
+            logger.info(f"{dcu} not moved to LTM. Unable to fetch device details")
+    except Exception as err:
+        logger.error(f"Exception occurred: {err}\n{traceback.format_exc()}")
+
+logger.info('Moving BFTP Devices to LTM')
+for bftp in IdentifiedBFTPs:
+    device_name, device_id = helpers.integrated_services.fetch_dev_id_and_name(bftp)
+    try:
+        logger.info(f'Moving {bftp} to LTM')
+        if None not in (device_name, device_id):
+            is_moved = helpers.integrated_services.move_device_to_ltm(device_id, "BRT", "BFTP")
+            if is_moved:
+                is_renamed = helpers.soti.rename_device_with_script(device_id, config["COMMON"]["LTM_PREFIX"] + bftp)
+                moved_to_ltm.append(bftp)
+                logger.info(f"{bftp} moved to LTM")
+            else:
+                unmoved_to_ltm.append(bftp)
+                logger.info(f"{bftp} not moved to LTM")
+        else:
+            unmoved_to_ltm.append(bftp)
+            logger.info(f"{bftp} not moved to LTM.Unable to fetch vehicle details")
+    except Exception as err:
+        logger.error(f"Exception occurred: {err}\n{traceback.format_exc()}")
+
+#######################################################################################################################
+# MOVE TO PROD
+#######################################################################################################################
+
+unmoved_to_prod = []
+moved_to_prod = []
+
+logger.info('Moving DCU Devices to Prod')
+for dcu in dcus_to_move_to_prod:
+    device_name, device_id = helpers.integrated_services.fetch_dev_id_and_name(dcu)
+    try:
+        logger.info(f'Moving {dcu} to Prod')
+        if None not in (device_name, device_id):
+            is_moved = helpers.integrated_services.move_device_to_prod(device_id, "BRT", "DCU")
+            if is_moved:
+                is_renamed = helpers.soti.rename_device_with_script(device_id, dcu.replace(config["COMMON"]["LTM_PREFIX"], ""))
+                moved_to_prod.append(dcu)
+                logger.info(f"{dcu} moved to Prod")
+            else:
+                unmoved_to_prod.append(dcu)
+                logger.info(f"{dcu} not moved to Prod")
+        else:
+            unmoved_to_prod.append(dcu)
+            logger.info(f"{dcu} not moved to Prod. Unable to fetch vehicle details")
+    except Exception as err:
+        logger.error(f"Exception occurred: {err}\n{traceback.format_exc()}")
+
+logger.info('Moving BFTP Devices to Prod')
+for bftp in bftps_to_move_to_prod:
+    device_name, device_id = helpers.integrated_services.fetch_dev_id_and_name(bftp)
+    try:
+        logger.info(f'Moving {bftp} to Prod')
+        if None not in (device_name, device_id):
+            is_moved = helpers.integrated_services.move_device_to_prod(device_id, "BRT", "BFTP")
+            if is_moved:
+                is_renamed = helpers.soti.rename_device_with_script(device_id, bftp.replace(config["COMMON"]["LTM_PREFIX"], ""))
+                moved_to_prod.append(bftp)
+                logger.info(f"{bftp} moved to Prod")
+            else:
+                unmoved_to_prod.append(bftp)
+                logger.info(f"{bftp} not moved to Prod")
+        else:
+            unmoved_to_prod.append(bftp)
+            logger.info(f"{bftp} not moved to Prod. Unable to fetch vehicle details")
+    except Exception as err:
+        logger.error(f"Exception occurred: {err}\n{traceback.format_exc()}")
+
+
+unidentified_devices = list(UnIdentifiedBFTPs.union(UnIdentifiedDCUs))
+
+try:
+    logger.info('Exporting Report')
+    helpers.utility.export_report("BRT", moved_to_ltm, unmoved_to_ltm, moved_to_prod, unmoved_to_prod, unidentified_devices)
+except Exception as err:
+    logger.error(f"Exception occurred: {err}\n{traceback.format_exc()}")
+

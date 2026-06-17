@@ -1,0 +1,29 @@
+# Azure AI Foundry Agent Service
+azure-ai-projects>=1.0.0
+azure-ai-agents>=1.0.0
+# Azure Storage — download DVA Excel from Blob Storage
+azure-storage-blob>=12.20.0
+azure-identity>=1.17.0
+
+# OpenAI SDK (used by azure-ai-projects under the hood)
+openai>=1.50.0
+
+# MCP Python SDK (client side — connects to local soti_mcp_server)
+mcp>=1.0.0
+
+# Cosmos DB for MongoDB (vCore) — uses pymongo, NOT azure-cosmos SDK
+pymongo>=4.7.0
+dnspython>=2.6.0
+
+# DVA Excel reading
+pandas>=2.0.0
+openpyxl>=3.1.0
+
+# Strict JSON contracts
+pydantic>=2.0.0
+
+# Terminal HITL prompts
+rich>=13.0.0
+
+# Config
+python-dotenv>=1.0.0

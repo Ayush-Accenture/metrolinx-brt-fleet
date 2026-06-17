@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}All Runs — BRT Fleet Ops{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-4">
+  <h1 class="text-2xl font-bold">Fleet Movement Runs</h1>
+  <span class="text-sm text-gray-500">{{ runs|length }} run(s) found</span>
+</div>
+
+{% if not runs %}
+<div class="bg-white rounded shadow p-8 text-center text-gray-400">
+  No runs found in output directory. Run the pipeline first.
+</div>
+{% else %}
+<div class="bg-white rounded shadow overflow-hidden">
+  <table class="w-full text-sm">
+    <thead class="bg-blue-900 text-white text-left">
+      <tr>
+        <th class="px-4 py-3">Run ID</th>
+        <th class="px-4 py-3">Agency</th>
+        <th class="px-4 py-3">State</th>
+        <th class="px-4 py-3">Current Step</th>
+        <th class="px-4 py-3">Started (UTC)</th>
+        <th class="px-4 py-3">Steps Done</th>
+        <th class="px-4 py-3">Action</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in runs %}
+      {% set state = run.state|default("?") %}
+      <tr class="border-b hover:bg-blue-50
+        {% if 'AWAITING' in state or 'ON_HOLD' in state %} bg-yellow-50 {% endif %}
+        {% if 'COMPLETED' in state %} bg-green-50 {% endif %}
+        {% if 'FAILED' in state or 'ABORTED' in state %} bg-red-50 {% endif %}">
+        <td class="px-4 py-3 font-mono font-semibold">
+          <a href="/runs/{{ run.run_id }}" class="text-blue-700 hover:underline">{{ run.run_id }}</a>
+        </td>
+        <td class="px-4 py-3">{{ run.agency|default("?") }}</td>
+        <td class="px-4 py-3">
+          {% if 'AWAITING' in state or 'ON_HOLD' in state %}
+            <span class="px-2 py-0.5 rounded text-xs font-bold bg-yellow-200 text-yellow-900">{{ state }}</span>
+          {% elif 'COMPLETED' in state %}
+            <span class="px-2 py-0.5 rounded text-xs font-bold bg-green-200 text-green-900">{{ state }}</span>
+          {% elif 'FAILED' in state or 'ABORTED' in state %}
+            <span class="px-2 py-0.5 rounded text-xs font-bold bg-red-200 text-red-900">{{ state }}</span>
+          {% elif 'MOVING' in state or 'RECONCILING' in state %}
+            <span class="px-2 py-0.5 rounded text-xs font-bold bg-blue-200 text-blue-900">{{ state }}</span>
+          {% else %}
+            <span class="px-2 py-0.5 rounded text-xs bg-gray-200">{{ state }}</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-3 text-gray-500 text-xs">{{ run.current_step|default("?") }}</td>
+        <td class="px-4 py-3 text-gray-500 text-xs">{{ run.started_utc|default("")|ts_short }}</td>
+        <td class="px-4 py-3 text-center">{{ run.steps|length }}</td>
+        <td class="px-4 py-3">
+          <a href="/runs/{{ run.run_id }}"
+             class="bg-blue-700 hover:bg-blue-800 text-white text-xs px-3 py-1 rounded">
+            {% if 'AWAITING' in state or 'ON_HOLD' in state %}Review{% else %}View{% endif %}
+          </a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "soti-mobicontrol": {
+      "command": "python",
+      "args": ["server.py"],
+      "cwd": "/path/to/soti-mcp-server",
+      "env": {
+        "SOTI_BASE_URL":       "https://20.220.205.86/MobiControl/api",
+        "SOTI_USERNAME":       "<your_username>",
+        "SOTI_PASSWORD":       "<your_password>",
+        "SOTI_CLIENT_ID":      "<your_client_id>",
+        "SOTI_CLIENT_SECRET":  "<your_client_secret>"
+      }
+    }
+  }
+}

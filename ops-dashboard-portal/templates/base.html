@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}BRT Fleet Ops Dashboard{% endblock %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet" />
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="bg-gray-100 text-gray-900 min-h-screen">
+
+  <!-- Nav -->
+  <nav class="bg-blue-900 text-white px-6 py-3 flex items-center gap-6 shadow">
+    <span class="font-bold text-lg tracking-wide">BRT Fleet Ops</span>
+    <a href="/" class="hover:text-blue-200 text-sm">All Runs</a>
+  </nav>
+
+  <main class="max-w-7xl mx-auto px-4 py-6">
+    {% block content %}{% endblock %}
+  </main>
+
+</body>
+</html>
