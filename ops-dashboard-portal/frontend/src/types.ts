@@ -103,7 +103,23 @@ export interface DecisionForm {
   subset_indices: string;
 }
 
-// Pipeline stage ordering for the timeline
+export interface NLEdit {
+  action: 'exclude' | 'retarget';
+  device: string;
+  bus: string;
+  target_folder?: 'Production' | 'LTM';
+  reason?: string;
+}
+
+export interface NLEditResult {
+  run_id?: string;
+  instruction?: string;
+  edits: NLEdit[];
+  unmatched: string[];
+  summary: string;
+}
+
+// Pipeline stage ordering for the timeline (6-stage flow; SR stages removed)
 export const PIPELINE_STAGES = [
   { key: 'RECEIVED',              label: 'Triggered',         step: 'stage1_trigger' },
   { key: 'PARSING',               label: 'Parse DVA',         step: 'stage2_parse' },
@@ -112,9 +128,7 @@ export const PIPELINE_STAGES = [
   { key: 'MOVING',                label: 'Executing',         step: 'stage4_execute' },
   { key: 'RECONCILING',           label: 'Reconciling',       step: 'stage5_reconcile' },
   { key: 'AWAITING_VALIDATION',   label: 'HITL-3 Validate',   step: 'stage6_hitl_validation' },
-  { key: 'DRAFTING_SR',           label: 'Draft SR',          step: 'stage7_draft_sr' },
-  { key: 'AWAITING_SR_APPROVAL',  label: 'HITL-4 SR Closure', step: 'stage7_hitl4' },
-  { key: 'COMPLETED',             label: 'Completed',         step: 'stage8_complete' },
+  { key: 'COMPLETED',             label: 'Completed',         step: 'stage6_validation' },
 ] as const;
 
 export type RunState = typeof PIPELINE_STAGES[number]['key'] | 'ABORTED' | 'FAILED' | 'ON_HOLD';

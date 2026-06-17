@@ -22,6 +22,7 @@ Start frontend dev server (terminal 2):
   -> http://localhost:5173   (proxies /api/* -> http://localhost:8080)
 """
 import json
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,8 +36,64 @@ load_dotenv()
 
 # -- Path resolution -----------------------------------------------------------
 _PORTAL_DIR    = Path(__file__).resolve().parent
-_OUTPUT_DIR    = _PORTAL_DIR.parent / "fleet-agents" / "output"
+_FLEET_DIR     = _PORTAL_DIR.parent / "fleet-agents"
+_OUTPUT_DIR    = _FLEET_DIR / "output"
 _FRONTEND_DIST = _PORTAL_DIR / "frontend" / "dist"
+
+# Make the fleet-agents package importable so the portal can call the LLM agents
+# (QAAgent, NLEditAgent). Load fleet-agents/.env first so config picks up the
+# Azure OpenAI key and USE_MOCK_* flags.
+if str(_FLEET_DIR) not in sys.path:
+    sys.path.insert(0, str(_FLEET_DIR))
+load_dotenv(_FLEET_DIR / ".env")
+
+
+def _as_count(value) -> int:
+    """Coerce a stored value (int count or list) into a count."""
+    if isinstance(value, int):
+        return value
+    if isinstance(value, list):
+        return len(value)
+    return 0
+
+
+def _build_run_context(run_id: str) -> dict:
+    """Assemble a compact run context for the Q&A agent from the run document."""
+    doc = _load_run(run_id) or {}
+    steps = doc.get("steps", [])
+
+    def _step_output(step_name: str) -> dict:
+        for s in steps:
+            if s.get("step") == step_name:
+                return s.get("output") or {}
+        return {}
+
+    enrich_out = _step_output("stage2b_enrich")
+    parse_out = _step_output("stage2_parse")
+    recon_out = _step_output("stage5_reconcile")
+    pending = _pending_gate(run_id) or {}
+    # Enriched moves (with current SOTI folder) are richest; fall back to the
+    # parse step, then to the live HITL-2 pending payload.
+    moves = (enrich_out.get("intended_moves")
+             or parse_out.get("intended_moves")
+             or (pending.get("payload", {}) or {}).get("moves", []))
+    return {
+        "run_id": run_id,
+        "state": doc.get("state", "unknown"),
+        "current_step": doc.get("current_step", ""),
+        "intended_moves": moves,
+        "recon_result": {
+            # stage5 stores counts under moved/unmoved/unidentified and the full
+            # device lists under *_list keys — prefer the lists for the agent.
+            "moved_count": _as_count(recon_out.get("moved")),
+            "unmoved": recon_out.get("unmoved_list", []),
+            "unidentified": recon_out.get("unidentified_list", []),
+            "summary": recon_out.get("summary", ""),
+        },
+        "approvals": doc.get("approvals", []),
+        "pending_gate": pending.get("gate", ""),
+        "pending_payload": pending.get("payload", {}),
+    }
 
 app = FastAPI(title="BRT Fleet Movement -- Ops Dashboard API", version="2.0.0")
 
@@ -170,6 +227,60 @@ async def submit_decision(
         pending_path.unlink()
 
     return {"status": "ok", "run_id": run_id, "gate": gate, "decision": decision}
+
+
+# -- LLM-assisted endpoints (Q&A + NL edit accelerator) ------------------------
+# These run synchronously (plain `def`) so FastAPI executes them in a threadpool
+# and the blocking OpenAI SDK call doesn't stall the event loop. The agents are
+# imported lazily so a missing dependency degrades gracefully to a JSON error.
+
+@app.post("/api/runs/{run_id}/ask")
+def ask_question(run_id: str, question: str = Form(...)):
+    """Conversational Q&A over a single run's data (grounded in run context)."""
+    try:
+        from agents.super_agents import QAAgent
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {"error": f"QA agent unavailable: {exc}"}, status_code=503
+        )
+    try:
+        context = _build_run_context(run_id)
+        answer = QAAgent().answer(question, context)
+        return {"run_id": run_id, "question": question, "answer": answer}
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@app.post("/api/runs/{run_id}/nl-edit")
+def nl_edit(run_id: str, instruction: str = Form(...)):
+    """
+    Parse a free-text reviewer instruction into PROPOSED, validated overlay edits
+    against the current HITL-2 move list. Edits are never auto-applied — the
+    operator still submits the actual decision via /decision.
+    """
+    try:
+        from agents.super_agents import NLEditAgent
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(
+            {"error": f"NL-edit agent unavailable: {exc}"}, status_code=503
+        )
+    pending = _pending_gate(run_id) or {}
+    moves = (pending.get("payload", {}) or {}).get("moves", [])
+    if not moves:
+        # Fall back to the persisted enriched move list (normalise key names)
+        ctx = _build_run_context(run_id)
+        moves = [
+            {"index": i,
+             "device": m.get("current_device") or m.get("device", ""),
+             "bus": m.get("bus_number") or m.get("bus", ""),
+             "target": m.get("target_folder") or m.get("target", "")}
+            for i, m in enumerate(ctx.get("intended_moves", []))
+        ]
+    try:
+        result = NLEditAgent().parse_edits(instruction, moves)
+        return {"run_id": run_id, "instruction": instruction, **result}
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": str(exc)}, status_code=500)
 
 
 # -- Serve React production build (deployment) --------------------------------

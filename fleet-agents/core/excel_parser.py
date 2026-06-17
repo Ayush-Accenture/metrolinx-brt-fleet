@@ -36,6 +36,23 @@ _LTM_KEYWORDS = {"off-site", "ltm"}
 _DEVICE_RE = re.compile(r"^(?:LTM_)?BRT_DCU_\d+_\d+$", re.IGNORECASE)
 
 
+def _detect_header_row(local_path: str, max_scan: int = 15) -> int:
+    """
+    Find the row index that holds the real column header.
+
+    The raw PRESTO/DVA export has several title/metadata rows (report title,
+    "Printed on: ...", blank rows) before the actual header. A manually-cleaned
+    file has the header on row 0. Scan the first rows and return the index of
+    the first one containing a known bus-number alias.
+    """
+    preview = pd.read_excel(local_path, dtype=str, header=None, nrows=max_scan)
+    for i in range(len(preview)):
+        cells = {str(v).strip().lower() for v in preview.iloc[i].tolist() if str(v) != "nan"}
+        if any(alias in cells for alias in _BUS_ALIASES):
+            return i
+    return 0  # fall back to first row (clean file)
+
+
 def _infer_target(vehicle_status: str) -> str | None:
     """
     Deterministically map vehicle status → target SOTI folder.
@@ -153,8 +170,12 @@ def parse_dva(file_path: str) -> Tuple[list[IntendedMove], list[dict]]:
         local_path = file_path
 
     try:
-        df = pd.read_excel(local_path, dtype=str)
-        df.columns = [c.strip() for c in df.columns]
+        # Auto-detect the header row — the raw DVA export has title/metadata
+        # rows above the real header; a cleaned file has it on row 0.
+        header_row = _detect_header_row(local_path)
+        df = pd.read_excel(local_path, dtype=str, header=header_row)
+        df.columns = [str(c).strip() for c in df.columns]
+        df = df.dropna(how="all")   # drop fully-empty trailing/spacer rows
         df = df.fillna("")
 
         # ── Auto-detect column names by fuzzy matching aliases ────────────────
@@ -191,14 +212,14 @@ def parse_dva(file_path: str) -> Tuple[list[IntendedMove], list[dict]]:
                 )
                 continue
 
-            # Derive device name from bus number (convention: BRT_DCU_<bus>_1)
-            # Derive device names from bus number (brampton.py convention):
-            #   DCU  → BRT_DCU_{bus}_1   (device type 136)
-            #   BFTP → BRT_BFTP_{bus}_1  (device type 130)
-            # Bus number is zero-padded to 4 digits to match SOTI naming.
-            bus_padded = bus.lstrip("0").zfill(4) if bus.isdigit() else bus
-            dcu_device  = f"BRT_DCU_{bus_padded}_1"
-            bftp_device = f"BRT_BFTP_{bus_padded}_1"
+            # Derive device names from bus number.
+            # Naming format is configurable via SOTI_BUS_DIGITS and SOTI_DEVICE_SUFFIX:
+            #   Production SOTI: BRT_DCU_{bus:04d}_1  (SOTI_BUS_DIGITS=4, SOTI_DEVICE_SUFFIX=_1)
+            #   Test SOTI:       BRT_DCU_{bus:05d}    (SOTI_BUS_DIGITS=5, SOTI_DEVICE_SUFFIX=)
+            bus_padded  = bus.lstrip("0").zfill(config.SOTI_BUS_DIGITS) if bus.isdigit() else bus
+            suffix      = config.SOTI_DEVICE_SUFFIX
+            dcu_device  = f"BRT_DCU_{bus_padded}{suffix}"
+            bftp_device = f"BRT_BFTP_{bus_padded}{suffix}"
 
             target = _infer_target(status)
             if target is None:

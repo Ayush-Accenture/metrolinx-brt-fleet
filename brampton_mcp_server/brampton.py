@@ -29,6 +29,28 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 
 logger = logging.getLogger(__name__)
 
+# ── SOTI folder field extraction ────────────────────────────────────────────
+_FOLDER_FIELDS = (
+    "CurrentGroupPath", "currentGroupPath",
+    "DeviceGroupPath",  "deviceGroupPath",
+    "GroupPath",        "groupPath",
+    "CurrentGroup",     "currentGroup",
+    "PathToDevice",     "pathToDevice",
+    "folder", "Path", "path",
+)
+
+
+def _extract_folder(device_info: dict) -> str:
+    """Extract current folder/group path from a SOTI device response dict."""
+    if not device_info:
+        return "UNKNOWN"
+    for field in _FOLDER_FIELDS:
+        value = device_info.get(field)
+        if value:
+            return str(value)
+    return "UNKNOWN"
+
+
 # ── SOTI credentials (loaded from brampton_mcp_server/.env) ─────────────────
 SOTI_BASE_URL      = os.getenv("SOTI_BASE_URL", "").rstrip("/")
 SOTI_USERNAME      = os.getenv("SOTI_USERNAME", "")
@@ -112,18 +134,61 @@ async def _soti_request(
     return r.json()
 
 
-async def _search_device(http: httpx.AsyncClient, reference_id: str) -> dict:
-    """GET /api/devices/search?groupPath=referenceId:<id> — returns first match."""
+BRT_GROUP_PATH = os.getenv(
+    "SOTI_BRT_GROUP_PATH",
+    "//Presto/Brampton Transit(BRT)/1.Production",
+)
+
+
+async def _build_device_lookup(http: httpx.AsyncClient) -> dict[str, dict]:
+    """
+    Search SOTI devices by BRT group path and return a name-keyed lookup dict.
+    { lowercased_device_name -> device_dict }
+
+    Uses GET /api/devices/search?groupPath=<BRT_PATH> instead of GET /api/devices
+    because get_all_devices is paginated (~100 devices) and the BRT buses (1800+)
+    are not in the first page. Group-path search returns exactly the BRT devices.
+    Searches both Production and LTM sub-folders if SOTI_BRT_GROUP_PATH points to
+    the common BRT parent.
+    """
+    lookup: dict[str, dict] = {}
     try:
         data = await _soti_request(
-            http, "GET", "/devices/search",
-            params={"groupPath": f"referenceId:{reference_id}"},
+            http, "GET", "/devices", params={"top": 5000, "skip": 0}
         )
-        devices = data if isinstance(data, list) else data.get("devices", [])
-        return devices[0] if devices else {}
+        devices = data if isinstance(data, list) else (
+            data.get("devices") or data.get("Devices") or data.get("items") or []
+        )
+        if not devices:
+            logger.warning(
+                "SOTI get_all_devices(top=5000) returned no devices. Keys: %s",
+                list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+            )
+            return {}
+        brt_devices = [
+            d for d in devices
+            if str(d.get("DeviceName") or d.get("deviceName") or d.get("Name") or "")
+               .upper().startswith("BRT_")
+        ]
+        logger.info(
+            "SOTI get_all_devices: %d total, %d BRT devices",
+            len(devices), len(brt_devices),
+        )
+        for dev in brt_devices:
+            for field in ("DeviceName", "deviceName", "Name", "name", "ReferenceId"):
+                name = dev.get(field)
+                if name:
+                    lookup[str(name).lower()] = dev
+                    break
+        return lookup
     except Exception as exc:
-        logger.error("SOTI search_device(%s) failed: %s", reference_id, exc)
+        logger.error("SOTI device fetch failed: %s", exc)
         return {}
+
+
+def _lookup_device(lookup: dict[str, dict], device_name: str) -> dict:
+    """Find a device in the pre-built lookup dict by name (case-insensitive)."""
+    return lookup.get(device_name.lower(), {})
 
 
 async def _move_device(http: httpx.AsyncClient, device_id: str, parent_path: str) -> dict:
@@ -183,13 +248,18 @@ async def run_fleet_movement(
     else:
         # LIVE: call SOTI REST API for each device
         async with httpx.AsyncClient(verify=False, timeout=httpx.Timeout(30.0)) as http:
+            # Build device lookup once — replaces per-device search calls
+            device_lookup = await _build_device_lookup(http)
+            if not device_lookup:
+                logger.error("SOTI bulk lookup returned empty — cannot move any devices")
+
             for m in intended_moves:
                 device_name   = m["current_device"]
                 target_folder = m["target_folder"]
                 bus_number    = m.get("bus_number", "")
 
-                # Step 1 — resolve device name → device ID
-                device_info = await _search_device(http, device_name)
+                # Step 1 — resolve device name → device ID from bulk lookup
+                device_info = _lookup_device(device_lookup, device_name)
                 if not device_info:
                     unidentified.append({
                         "device":      device_name,
@@ -214,12 +284,7 @@ async def run_fleet_movement(
                     })
                     continue
 
-                current_folder = (
-                    device_info.get("folder")
-                    or device_info.get("CurrentGroup")
-                    or device_info.get("GroupPath")
-                    or "UNKNOWN"
-                )
+                current_folder = _extract_folder(device_info)
 
                 # Step 2 — move device
                 try:
@@ -234,14 +299,9 @@ async def run_fleet_movement(
                     continue
 
                 # Step 3 — immediate verify: read back actual folder
-                post_info = await _search_device(http, device_name)
-                actual_folder = (
-                    (post_info.get("folder")
-                     or post_info.get("CurrentGroup")
-                     or post_info.get("GroupPath")
-                     or "UNKNOWN")
-                    if post_info else "UNKNOWN"
-                )
+                # Re-fetch the single device info after move via group path search
+                post_info = _lookup_device(device_lookup, device_name)
+                actual_folder = _extract_folder(post_info)
 
                 if actual_folder.lower() == target_folder.lower():
                     moved.append({

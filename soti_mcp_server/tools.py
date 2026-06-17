@@ -44,8 +44,11 @@ TOOL_DEFINITIONS: list[types.Tool] = [
     # Device reads
     _tool(
         name="get_all_devices",
-        description="[S.N.3] GET /api/devices – retrieve all devices. Used by Device Topology Function App.",
-        properties={},
+        description="[S.N.3] GET /api/devices?top=N&skip=N – retrieve devices with pagination. Used by Device Topology Function App.",
+        properties={
+            "top":  {"type": "integer", "description": "Max devices to return (default 5000)."},
+            "skip": {"type": "integer", "description": "Devices to skip for pagination (default 0)."},
+        },
         required=[],
     ),
 
@@ -94,6 +97,15 @@ TOOL_DEFINITIONS: list[types.Tool] = [
             "verify_and_sync":   {"type": "boolean", "description": "Verify and sync before returning. Default false."},
         },
         required=["path"],
+    ),
+
+    _tool(
+        name="search_devices_by_name",
+        description="GET /api/devices/search?filter=DeviceName eq '{name}' – find a device by its display name (e.g. BRT_DCU_0601_1). Use this to look up a specific device and get its current group path.",
+        properties={
+            "device_name": {"type": "string", "description": "The device display name to search for (exact match)."},
+        },
+        required=["device_name"],
     ),
 
     _tool(
@@ -191,7 +203,10 @@ async def _get_token_oauth(client: SotiClient, args: dict) -> Any:
     return await client.get_token_oauth()
 
 async def _get_all_devices(client: SotiClient, args: dict) -> Any:
-    return await client.get_all_devices()
+    return await client.get_all_devices(
+        top=int(args.get("top", 5000)),
+        skip=int(args.get("skip", 0)),
+    )
 
 async def _get_device_info(client: SotiClient, args: dict) -> Any:
     return await client.get_device_info(args["device_id"])
@@ -211,6 +226,9 @@ async def _search_devices_by_group_path_flat(client: SotiClient, args: dict) -> 
         include_subgroups=args.get("include_subgroups", False),
         verify_and_sync=args.get("verify_and_sync", False),
     )
+
+async def _search_devices_by_name(client: SotiClient, args: dict) -> Any:
+    return await client.search_devices_by_name(args["device_name"])
 
 async def _filter_devices_by_logical_id(client: SotiClient, args: dict) -> Any:
     return await client.filter_devices_by_logical_id(args["logical_device_id"])
@@ -248,6 +266,7 @@ TOOL_HANDLERS: dict[str, Handler] = {
     "search_devices_by_group_path":                _search_devices_by_group_path,
     "get_last_known_location":                     _get_last_known_location,
     "search_devices_by_group_path_flat":           _search_devices_by_group_path_flat,
+    "search_devices_by_name":                      _search_devices_by_name,
     "filter_devices_by_logical_id":                _filter_devices_by_logical_id,
     "send_action_to_device":                       _send_action_to_device,
     "send_action_to_device_group_by_reference_id": _send_action_to_device_group_by_reference_id,

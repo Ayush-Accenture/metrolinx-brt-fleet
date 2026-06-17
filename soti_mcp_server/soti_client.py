@@ -178,9 +178,11 @@ class SotiClient:
         return {"access_token": ts.access_token, "expires_at": ts.expires_at}
 
     # Devices
-    async def get_all_devices(self) -> Any:
-        """GET /api/devices – retrieve all devices."""
-        return await self._request("GET", "/devices")
+    async def get_all_devices(self, top: int = 5000, skip: int = 0) -> Any:
+        """GET /api/devices?top=N&skip=N – retrieve devices with pagination."""
+        return await self._request(
+            "GET", "/devices", params={"top": top, "skip": skip}
+        )
 
     async def get_device_info(self, device_id: str) -> Any:
         """GET /api/devices/{deviceId} – get a single device."""
@@ -215,6 +217,14 @@ class SotiClient:
                 "includeSubgroups": str(include_subgroups).lower(),
                 "verifyAndSync":    str(verify_and_sync).lower(),
             },
+        )
+
+    async def search_devices_by_name(self, device_name: str) -> Any:
+        """GET /api/devices/search?filter=DeviceName eq '{device_name}'"""
+        return await self._request(
+            "GET",
+            "/devices/search",
+            params={"filter": f"DeviceName eq '{device_name}'"},
         )
 
     async def filter_devices_by_logical_id(self, logical_device_id: str) -> Any:

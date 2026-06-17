@@ -2,6 +2,7 @@
 import { useState } from 'react'
 import type { PendingGate, DecisionForm } from '../types'
 import { submitDecision } from '../api'
+import NLEditBox from './NLEditBox'
 
 const GATE_CHOICES: Record<string, { value: string; label: string; colour: string }[]> = {
   'HITL-1': [
@@ -85,9 +86,20 @@ export default function HITLPanel({ pending, onSubmit }: Props) {
 
   const desc = GATE_DESCRIPTIONS[pending.gate] ?? `Gate: ${pending.gate}`
 
+  const hitl2Moves = (pending.payload?.moves as Record<string, unknown>[] | undefined) ?? []
+
   return (
     <form onSubmit={handleSubmit} aria-label={`HITL decision for ${pending.gate}`}>
       <p className="text-sm text-slate-600 mb-4">{desc}</p>
+
+      {/* NL edit accelerator — HITL-2 only */}
+      {pending.gate === 'HITL-2' && hitl2Moves.length > 0 && (
+        <NLEditBox
+          runId={pending.run_id}
+          moves={hitl2Moves}
+          onApplySubset={(csv) => { setSelected('approve_subset'); setSubsetIndices(csv) }}
+        />
+      )}
 
       {/* Decision buttons */}
       <div className="flex flex-wrap gap-2 mb-4">

@@ -7,6 +7,7 @@ import StateBadge from './StateBadge'
 import HITLPanel from './HITLPanel'
 import WorkbookViewer from './WorkbookViewer'
 import AuditTail from './AuditTail'
+import QAChat from './QAChat'
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -367,6 +368,11 @@ export default function RunCard({ run, expanded, onToggle, onDecisionSubmit }: P
               </div>
             </Section>
           )}
+
+          {/* ── Ask the Assistant (Q&A) ── */}
+          <Section title="Ask the Assistant" badge="🤖 AI" defaultOpen={isAwaiting}>
+            <QAChat runId={run.run_id} />
+          </Section>
 
           {/* ── Audit Trail ── */}
           <Section title="Audit Trail" badge={`${run.steps.length} steps`} defaultOpen={false}>

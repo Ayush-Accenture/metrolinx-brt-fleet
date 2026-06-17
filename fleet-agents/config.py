@@ -23,6 +23,14 @@ AZURE_OPENAI_DEPLOYMENT: str = os.getenv(
 # API key for Azure OpenAI — set in .env, never committed to source control
 AZURE_OPENAI_API_KEY: str = os.getenv("AZURE_OPENAI_API_KEY", "")
 
+# ── SOTI group path — BRT parent folder containing Production & LTM sub-folders ─
+# GET /api/devices is paginated; searching this path returns only BRT devices.
+# Adjust if the SOTI folder hierarchy is ever renamed.
+SOTI_BRT_GROUP_PATH: str = os.getenv(
+    "SOTI_BRT_GROUP_PATH",
+    "//Presto/Brampton Transit(BRT)/1.Production",
+)
+
 # ── SOTI MCP Server (individual device reads — enrichment & reconciliation) ──
 SOTI_MCP_TRANSPORT: str = os.getenv("SOTI_MCP_TRANSPORT", "stdio")   # "stdio" | "http"
 # stdio: launch soti_mcp_server/server.py as a subprocess
@@ -48,8 +56,9 @@ FLEET_MCP_CWD: str = os.getenv(
 # Authentication: SCRAM-SHA-256 via connection string.
 # Store the full connection string (including password) ONLY in .env — never in code.
 COSMOS_CONNECTION_STRING: str = os.getenv("COSMOS_CONNECTION_STRING", "")
-COSMOS_DATABASE: str = os.getenv("COSMOS_DATABASE", "agenticaicosmos")
-COSMOS_INTAKE_COLLECTION: str = os.getenv("COSMOS_INTAKE_COLLECTION", "dva_intake")
+COSMOS_DATABASE: str = os.getenv("COSMOS_DATABASE", "fmi-db")
+COSMOS_INTAKE_COLLECTION: str = os.getenv("COSMOS_INTAKE_COLLECTION", "intake")
+COSMOS_MOVEMENT_COLLECTION: str = os.getenv("COSMOS_MOVEMENT_COLLECTION", "movement")
 
 # ── Mock flags — flip to False when real access lands ────────────────────────
 USE_MOCK_LLM: bool = os.getenv("USE_MOCK_LLM", "true").lower() == "true"
@@ -58,6 +67,13 @@ USE_MOCK_HITL: bool = os.getenv("USE_MOCK_HITL", "false").lower() == "true"
 USE_MOCK_COSMOS: bool = os.getenv("USE_MOCK_COSMOS", "true").lower() == "true"
 # Set to false once Storage Blob Data Reader role is confirmed for the runner identity
 USE_MOCK_BLOB: bool = os.getenv("USE_MOCK_BLOB", "true").lower() == "true"
+
+# ── SOTI device naming convention ────────────────────────────────────────────
+# Production BRT devices: BRT_DCU_{bus:04d}_1  (4-digit bus, _1 suffix)
+# This test SOTI instance uses 5-digit sequential IDs with no suffix:
+#   BRT_DCU_00002   (set SOTI_BUS_DIGITS=5, SOTI_DEVICE_SUFFIX= to match)
+SOTI_BUS_DIGITS: int   = int(os.getenv("SOTI_BUS_DIGITS", "4"))
+SOTI_DEVICE_SUFFIX: str = os.getenv("SOTI_DEVICE_SUFFIX", "_1")
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 STATE_DIR: str = os.getenv("STATE_DIR", "output")      # all outputs go here

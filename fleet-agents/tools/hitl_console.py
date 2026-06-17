@@ -248,45 +248,31 @@ def prompt_post_move_validation(
     return choice  # type: ignore[return-value]
 
 
-# ── HITL-4: SR closure ────────────────────────────────────────────────────────
-
-def prompt_sr_closure(sr_draft: str, run_id: str = "unknown") -> Literal["approve", "edit", "hold"]:
-    """Display drafted SR notes and request L2 closure approval."""
-    if config.USE_MOCK_HITL:
-        return _auto("HITL-4 SR closure", "approve")  # type: ignore[return-value]
-    if config.USE_WEB_HITL:
-        return _web_hitl("HITL-4", run_id, {"sr_notes": sr_draft}, "approve")  # type: ignore[return-value]
-
-    console.print(Panel(sr_draft, title="Draft SR Notes", border_style="magenta"))
-
-    choice = Prompt.ask(
-        "[bold]SR closure decision[/bold]",
-        choices=["approve", "edit", "hold"],
-        default="approve",
-    )
-    return choice  # type: ignore[return-value]
-
-
 # ── HITL-Error: Stage 4 SOTI move failure ─────────────────────────────────────
 
 def prompt_hitl_error(
     device: str,
     error: str,
     run_id: str = "unknown",
+    diagnosis: str = "",
 ) -> Literal["skip", "retry", "abort"]:
     """
     HITL-Error gate: a SOTI move_device call raised an exception during Stage 4.
     L2 can skip this device and continue, retry it once, or abort the whole run.
+    `diagnosis` is an optional LLM error-triage note shown to the operator.
     """
     if config.USE_MOCK_HITL:
         return _auto(f"HITL-Error [{device}]", "skip")  # type: ignore[return-value]
     if config.USE_WEB_HITL:
-        return _web_hitl(f"HITL-Error:{device}", run_id, {"device": device, "error": error}, "skip")  # type: ignore[return-value]
+        return _web_hitl(f"HITL-Error:{device}", run_id,
+                         {"device": device, "error": error, "diagnosis": diagnosis}, "skip")  # type: ignore[return-value]
 
+    diag_line = f"[cyan]AI diagnosis[/cyan]: {diagnosis}\n\n" if diagnosis else ""
     console.print(Panel(
         f"[bold red]SOTI move_device call failed[/bold red]\n\n"
         f"Device : [yellow]{device}[/yellow]\n"
         f"Error  : {error}\n\n"
+        f"{diag_line}"
         f"[bold]Options[/bold]\n"
         f"  skip  — Skip this device and continue with remaining moves\n"
         f"  retry — Retry this device once more\n"

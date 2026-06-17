@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 import config
 from schemas.intake_record import AttachmentDetails, IntakeRecord, StructuralCheck
+from schemas.intended_move import IntendedMove
 
 log = logging.getLogger(__name__)
 
@@ -65,8 +66,9 @@ async def get_intake_record(intake_id: str) -> IntakeRecord | None:
         db = client[config.COSMOS_DATABASE]
         collection = db[config.COSMOS_INTAKE_COLLECTION]
 
-        # Point read — match on the intake id field
-        doc = collection.find_one({"id": intake_id})
+        # Point read — Cosmos stores the intake id as the Mongo _id; some
+        # writers also set a separate "id" field. Match either.
+        doc = collection.find_one({"_id": intake_id}) or collection.find_one({"id": intake_id})
 
         if doc is None:
             log.warning("No document found in Cosmos for intake_id='%s'", intake_id)
@@ -80,7 +82,9 @@ async def get_intake_record(intake_id: str) -> IntakeRecord | None:
             )
             return None
 
-        # Remove MongoDB internal _id before validating with Pydantic
+        # Expose the Mongo _id as "id" for the mapper, then drop the raw _id.
+        if not doc.get("id"):
+            doc["id"] = doc.get("_id")
         doc.pop("_id", None)
         return _map_doc_to_intake_record(doc)
 
@@ -100,7 +104,7 @@ def _map_doc_to_intake_record(doc: dict) -> IntakeRecord:
     sc = doc.get("structuralCheck", {})
 
     return IntakeRecord(
-        id=doc["id"],
+        id=doc.get("id") or doc.get("_id"),
         agency=doc.get("agency", "BRT"),
         source=doc.get("source", "email"),
         email_message_id=email.get("messageId"),
@@ -130,6 +134,81 @@ def _agency_from_intake_id(intake_id: str) -> str:
     """
     parts = intake_id.replace("-", "_").split("_")
     return parts[1] if len(parts) >= 2 else "BRT"
+
+
+async def get_movements_from_db(run_id: str) -> list[IntendedMove]:
+    """
+    Fetch movement records from the Cosmos DB `movement` collection and
+    convert them into IntendedMove objects — replacing Excel file parsing.
+
+    Each document has:
+        dva.busNumber    → bus number
+        dva.vehicleStatus → ON / In Maintenance / Off-Site (LTM)
+
+    Returns an empty list if the collection has no records for this run_id,
+    causing the orchestrator to fall back to Excel parsing.
+    """
+    try:
+        client = _get_client()
+        db = client[config.COSMOS_DATABASE]
+        collection = db[config.COSMOS_MOVEMENT_COLLECTION]
+
+        docs = list(collection.find({"runId": run_id}))
+        if not docs:
+            log.warning(
+                "No movement records found in Cosmos for runId='%s' — will fall back to Excel",
+                run_id,
+            )
+            return []
+
+        log.info(
+            "Fetched %d movement records from Cosmos for runId='%s'",
+            len(docs), run_id,
+        )
+
+        moves: list[IntendedMove] = []
+        for doc in docs:
+            dva = doc.get("dva", {})
+            bus = str(dva.get("busNumber", "")).strip()
+            status = str(dva.get("vehicleStatus", "")).strip()
+
+            if not bus or not status:
+                continue
+
+            # Derive target folder from vehicle status (same logic as excel_parser)
+            s = status.lower()
+            if s in ("on", "in maintenance"):
+                target: str = "Production"
+            elif any(kw in s for kw in ("off-site", "ltm")):
+                target = "LTM"
+            else:
+                log.warning("Unrecognised vehicleStatus '%s' for bus %s — skipping", status, bus)
+                continue
+
+            # Derive device names using the same naming convention as excel_parser
+            bus_padded  = bus.lstrip("0").zfill(config.SOTI_BUS_DIGITS) if bus.isdigit() else bus
+            suffix      = config.SOTI_DEVICE_SUFFIX
+            for dev_type, device_name in (
+                ("DCU",  f"BRT_DCU_{bus_padded}{suffix}"),
+                ("BFTP", f"BRT_BFTP_{bus_padded}{suffix}"),
+            ):
+                moves.append(IntendedMove(
+                    bus_number=bus,
+                    current_device=device_name,
+                    target_folder=target,  # type: ignore[arg-type]
+                    vehicle_status=status,
+                    reason=f"[{dev_type}] Status '{status}' maps to {target} (from Cosmos DB)",
+                ))
+
+        log.info(
+            "Built %d IntendedMove objects from %d Cosmos movement records",
+            len(moves), len(docs),
+        )
+        return moves
+
+    except Exception as exc:
+        log.error("Cosmos movement fetch failed for runId='%s': %s", run_id, exc)
+        return []
 
 
 # ── Mock implementation ───────────────────────────────────────────────────────

@@ -46,6 +46,78 @@ class BaseAgent:
             "for a bus fleet management system. Respond in plain English only."
         )
 
+    def _complete(
+        self,
+        system_prompt: str,
+        user_content: str,
+        *,
+        json_mode: bool = False,
+        max_tokens: int = 1024,
+        temperature: float = 0.3,
+    ) -> str:
+        """
+        Low-level Azure OpenAI chat-completion call shared by all agents.
+        Set json_mode=True to request a strict JSON object response.
+        Caller is responsible for mock-mode short-circuiting.
+
+        Resilient to per-model parameter differences: newer models (e.g. the
+        gpt-5 family) require `max_completion_tokens` instead of `max_tokens`
+        and only accept the default temperature. On a 400 that names an
+        unsupported/unknown parameter, that parameter is dropped and the call
+        is retried so the agents work across model deployments.
+        """
+        from openai import BadRequestError
+
+        client = self._get_client()
+        kwargs: dict = {
+            "model": config.AZURE_OPENAI_DEPLOYMENT,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_content},
+            ],
+            # Newer Azure OpenAI models require max_completion_tokens.
+            "max_completion_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        log.debug("LLM call via Azure OpenAI | agent=%s | json=%s", self.name, json_mode)
+
+        for _ in range(4):  # at most a few retries, dropping one bad param each time
+            try:
+                response = client.chat.completions.create(**kwargs)
+                return response.choices[0].message.content or ""
+            except BadRequestError as exc:
+                dropped = self._drop_unsupported_param(kwargs, exc)
+                if not dropped:
+                    raise
+                log.warning("LLM param '%s' unsupported by model — retrying without it",
+                            dropped)
+        # Final attempt with whatever params remain
+        response = client.chat.completions.create(**kwargs)
+        return response.choices[0].message.content or ""
+
+    @staticmethod
+    def _drop_unsupported_param(kwargs: dict, exc: "Exception") -> str | None:
+        """
+        Inspect a 400 error and remove the offending parameter from kwargs so the
+        call can be retried. Handles the common max_tokens→max_completion_tokens
+        rename and unsupported temperature. Returns the dropped key, or None.
+        """
+        msg = str(getattr(exc, "message", "") or exc).lower()
+        # max_tokens not supported → switch to max_completion_tokens
+        if "max_tokens" in msg and "max_completion_tokens" in msg:
+            if "max_tokens" in kwargs:
+                kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+                return "max_tokens"
+        # temperature (or any named param) unsupported → drop it
+        for key in ("temperature", "max_completion_tokens", "max_tokens",
+                    "response_format", "top_p"):
+            if key in msg and key in kwargs:
+                kwargs.pop(key)
+                return key
+        return None
+
     def narrate(self, structured_input: dict) -> str:
         """
         Send structured_input to Azure OpenAI and return the prose response.
@@ -54,20 +126,9 @@ class BaseAgent:
         if config.USE_MOCK_LLM:
             return self._mock_narration(structured_input)
 
-        client = self._get_client()
         user_content = json.dumps(structured_input, default=str, indent=2)
-
-        log.debug("Narrating via Azure OpenAI | agent=%s", self.name)
-        response = client.chat.completions.create(
-            model=config.AZURE_OPENAI_DEPLOYMENT,
-            messages=[
-                {"role": "system", "content": self._system_prompt()},
-                {"role": "user",   "content": user_content},
-            ],
-            max_tokens=1024,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content or f"[{self.name}] Empty response."
+        text = self._complete(self._system_prompt(), user_content)
+        return text or f"[{self.name}] Empty response."
 
     def _mock_narration(self, data: dict) -> str:
         """Override in each subclass with a realistic domain-specific stub."""

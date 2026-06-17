@@ -4,7 +4,7 @@ SotiMcpClient — wraps the official `mcp` Python SDK to call the SOTI MCP serve
 Supports stdio transport (default): launches soti_mcp_server/server.py as a subprocess.
 
 Real tool names are taken directly from soti_mcp_server/tools.py:
-  - search_devices_by_reference_id  -> find a device by reference ID
+  - get_all_devices                 -> fetch all devices (used for bulk lookup)
   - move_device_by_id               -> move a device to a parent group path
   - search_devices_by_group_path    -> search devices by group path
 """
@@ -13,6 +13,18 @@ import logging
 import config
 
 logger = logging.getLogger(__name__)
+
+# All known field names SOTI uses for device display name and current group path.
+_NAME_FIELDS   = ("DeviceName", "deviceName", "Name", "name", "ReferenceId", "referenceId")
+_ID_FIELDS     = ("DeviceId", "deviceId", "DeviceID", "id", "Id")
+_FOLDER_FIELDS = (
+    "CurrentGroupPath", "currentGroupPath",
+    "DeviceGroupPath",  "deviceGroupPath",
+    "GroupPath",        "groupPath",
+    "CurrentGroup",     "currentGroup",
+    "PathToDevice",     "pathToDevice",
+    "folder", "Path", "path",
+)
 
 
 def _safe_parse(text: str) -> any:
@@ -24,6 +36,14 @@ def _safe_parse(text: str) -> any:
     except json.JSONDecodeError:
         logger.warning("SOTI MCP returned non-JSON: %s", text[:200])
         return {"raw": text}
+
+
+def _get_field(d: dict, fields: tuple) -> str:
+    for f in fields:
+        v = d.get(f)
+        if v:
+            return str(v)
+    return ""
 
 
 class SotiMcpClient:
@@ -82,16 +102,98 @@ class SotiMcpClient:
         result = await self.session.list_tools()
         return [{"name": t.name, "description": t.description} for t in result.tools]
 
+    async def build_device_lookup(self) -> dict[str, dict]:
+        """
+        Fetch all BRT devices from SOTI by searching the BRT group path and return a lookup.
+
+        Returns: { lowercased_device_name -> {"id": ..., "folder": ..., "raw": {...}} }
+
+        Uses search_devices_by_group_path instead of get_all_devices because
+        get_all_devices is paginated (returns only the first ~100 devices system-wide)
+        and the BRT buses (numbered 1800+) appear well beyond the first page.
+        Searching by the BRT group path returns exactly the devices we need.
+        """
+        if self._use_mock:
+            return self._mock_device_lookup()
+
+        logger.info("SOTI build_device_lookup — fetching up to 5000 devices")
+        result = await self.session.call_tool(
+            "get_all_devices", {"top": 5000, "skip": 0}
+        )
+        text = result.content[0].text if result.content else ""
+
+        data = _safe_parse(text)
+        if not data:
+            logger.warning("SOTI get_all_devices(top=5000) returned empty response")
+            return {}
+
+        devices = data if isinstance(data, list) else (
+            data.get("devices") or data.get("Devices") or data.get("items") or []
+        )
+
+        if not devices:
+            logger.warning(
+                "SOTI get_all_devices(top=5000): no device list. Keys: %s",
+                list(data.keys()) if isinstance(data, dict) else type(data).__name__,
+            )
+            return {}
+
+        # Dump ALL device names to a file so we can see the exact naming convention
+        import os as _os
+        _names_dump = _os.path.join(config.STATE_DIR, "soti_all_device_names.txt")
+        try:
+            _os.makedirs(config.STATE_DIR, exist_ok=True)
+            all_names = [str(_get_field(d, _NAME_FIELDS)) for d in devices]
+            with open(_names_dump, "w", encoding="utf-8") as _f:
+                _f.write(f"Total devices returned: {len(devices)}\n\n")
+                _f.write("\n".join(sorted(all_names)))
+        except Exception as _e:
+            logger.warning("Could not write device names dump: %s", _e)
+
+        # Filter to only BRT devices — avoids noise from other SOTI clients
+        brt_devices = [
+            d for d in devices
+            if str(_get_field(d, _NAME_FIELDS)).upper().startswith("BRT_")
+        ]
+        logger.warning(
+            "SOTI get_all_devices: %d total, %d BRT devices. Names dump: %s",
+            len(devices), len(brt_devices), _names_dump,
+        )
+
+        lookup: dict[str, dict] = {}
+        for dev in brt_devices:
+            name = _get_field(dev, _NAME_FIELDS)
+            if not name:
+                continue
+            lookup[name.lower()] = {
+                "id":     _get_field(dev, _ID_FIELDS),
+                "folder": _get_field(dev, _FOLDER_FIELDS),
+                "raw":    dev,
+            }
+
+        logger.info("SOTI device lookup built: %d entries", len(lookup))
+        return lookup
+
+    def get_device_from_lookup(self, lookup: dict[str, dict], device_name: str) -> dict:
+        """Look up a single device from a pre-built bulk lookup dict."""
+        entry = lookup.get(device_name.lower(), {})
+        if not entry:
+            # In mock mode, if device not in lookup, generate a mock entry on-the-fly
+            if self._use_mock:
+                return self._mock_get_device(device_name)
+            return {}
+        return entry["raw"]
+
     async def get_device(self, device_name: str) -> dict:
         """
-        Fetch current device info from SOTI by reference ID (device name).
-        Real tool: search_devices_by_reference_id
-        Returns the first matching device dict, or empty dict if not found.
+        Kept for backward-compatibility with Stage 5 reconciliation calls.
+        Prefer build_device_lookup() + get_device_from_lookup() for Stage 2b.
         """
         if self._use_mock:
             return self._mock_get_device(device_name)
+        # Fallback: search by group path (works on this SOTI instance)
         result = await self.session.call_tool(
-            "search_devices_by_reference_id", {"reference_id": device_name}
+            "search_devices_by_group_path", {"path": device_name}
         )
         text = result.content[0].text if result.content else ""
         data = _safe_parse(text)
@@ -182,9 +284,34 @@ class SotiMcpClient:
             {"name": "search_devices_by_group_path",    "description": "Search devices by group path"},
         ]
 
+    def _mock_device_lookup(self) -> dict[str, dict]:
+        """Return a mock lookup dict with all BRT devices pre-populated.
+
+        Uses the same naming convention as cosmos_client / excel_parser so that
+        mock runs produce realistic Moved/Failed rows instead of all-Unidentified.
+        """
+        lookup = {}
+        digits = config.SOTI_BUS_DIGITS
+        suffix = config.SOTI_DEVICE_SUFFIX
+        for bus_num in range(601, 2600):
+            bus_str = str(bus_num).zfill(digits)
+            for dev_type in ("DCU", "BFTP"):
+                device_name = f"BRT_{dev_type}_{bus_str}{suffix}"
+                lookup[device_name.lower()] = {
+                    "id":     f"device-id-{device_name}",
+                    "folder": "Production",
+                    "raw": {
+                        "DeviceName": device_name,
+                        "folder": "Production",
+                        "status": "online",
+                        "mock": True,
+                    }
+                }
+        return lookup
+
     def _mock_get_device(self, name: str) -> dict:
         folder = "LTM" if name.upper().startswith("LTM_") else "Production"
-        return {"name": name, "folder": folder, "status": "online", "mock": True}
+        return {"DeviceName": name, "folder": folder, "status": "online", "mock": True}
 
     def _mock_move_device(self, name: str, target: str) -> dict:
         return {"name": name, "target": target, "success": True, "mock": True}

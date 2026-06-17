@@ -5,7 +5,7 @@ from .hitl_console import (
     prompt_pre_move_approval,
     prompt_subset_selection,
     prompt_post_move_validation,
-    prompt_sr_closure,
+    prompt_hitl_error,
 )
 
 __all__ = [
@@ -14,5 +14,5 @@ __all__ = [
     "prompt_pre_move_approval",
     "prompt_subset_selection",
     "prompt_post_move_validation",
-    "prompt_sr_closure",
+    "prompt_hitl_error",
 ]

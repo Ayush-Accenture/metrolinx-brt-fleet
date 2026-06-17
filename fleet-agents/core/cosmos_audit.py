@@ -42,110 +42,25 @@ def _ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-# ── run_states ───────────────────────────────────────────────────────────────
+# ── All audit writes disabled — pipeline uses movement collection only ────────
+# run_states, checkpoints, hitl_events, move_exceptions are not written.
+# Re-enable individually when audit persistence is needed.
 
 def upsert_run_state(run_id: str, state: str, step: str, extra: dict | None = None) -> None:
-    """
-    Upsert the mutable run document.
-    Called on every state transition so the portal always shows current state.
-    """
-    if config.USE_MOCK_COSMOS:
-        return
-    try:
-        db = _get_db()
-        doc: dict[str, Any] = {
-            "run_id":       run_id,
-            "state":        state,
-            "current_step": step,
-            "updated_utc":  _ts(),
-        }
-        if extra:
-            doc.update(extra)
-        db["run_states"].update_one(
-            {"run_id": run_id},
-            {"$set": doc, "$setOnInsert": {"created_utc": _ts()}},
-            upsert=True,
-        )
-    except Exception as exc:
-        log.warning("cosmos_audit.upsert_run_state failed (non-fatal): %s", exc)
+    return
 
-
-# ── checkpoints ──────────────────────────────────────────────────────────────
 
 def append_checkpoint(run_id: str, from_state: str, to_state: str,
                       triggered_by: str = "system", payload: dict | None = None) -> None:
-    """
-    Append one immutable checkpoint document.
-    Mirrors Checkpoint dataclass from HITL-and-Cosmos-state-capture/models.py.
-    """
-    if config.USE_MOCK_COSMOS:
-        return
-    try:
-        db = _get_db()
-        db["checkpoints"].insert_one({
-            "run_id":       run_id,
-            "from_state":   from_state,
-            "to_state":     to_state,
-            "triggered_by": triggered_by,
-            "payload":      payload or {},
-            "timestamp":    _ts(),
-            "partition_key": run_id,
-        })
-    except Exception as exc:
-        log.warning("cosmos_audit.append_checkpoint failed (non-fatal): %s", exc)
+    return
 
-
-# ── hitl_events ──────────────────────────────────────────────────────────────
 
 def append_hitl_event(run_id: str, gate: str, decision: str,
                       operator_id: str = "system", notes: str = "",
                       context: dict | None = None) -> None:
-    """
-    Record a human gate decision.
-    Mirrors HITLEvent dataclass from HITL-and-Cosmos-state-capture/models.py.
-    """
-    if config.USE_MOCK_COSMOS:
-        return
-    try:
-        db = _get_db()
-        db["hitl_events"].insert_one({
-            "run_id":           run_id,
-            "gate":             gate,
-            "decision":         decision,
-            "operator_id":      operator_id,
-            "notes":            notes,
-            "context_snapshot": context or {},
-            "timestamp":        _ts(),
-            "partition_key":    run_id,
-        })
-    except Exception as exc:
-        log.warning("cosmos_audit.append_hitl_event failed (non-fatal): %s", exc)
+    return
 
-
-# ── move_exceptions ───────────────────────────────────────────────────────────
 
 def append_move_exception(run_id: str, device: str, intended_folder: str,
                           actual_folder: str, reason: str) -> None:
-    """
-    Record a reconciliation discrepancy (intended vs actual SOTI path).
-    180-day TTL is set by creating a TTL index on first use — done once.
-    """
-    if config.USE_MOCK_COSMOS:
-        return
-    try:
-        db = _get_db()
-        col = db["move_exceptions"]
-        # Ensure TTL index exists (idempotent — Mongo ignores if already present)
-        col.create_index("timestamp", expireAfterSeconds=60 * 60 * 24 * 180,
-                         background=True)
-        col.insert_one({
-            "run_id":          run_id,
-            "device":          device,
-            "intended_folder": intended_folder,
-            "actual_folder":   actual_folder,
-            "reason":          reason,
-            "timestamp":       datetime.now(timezone.utc),   # datetime for TTL index
-            "partition_key":   run_id,
-        })
-    except Exception as exc:
-        log.warning("cosmos_audit.append_move_exception failed (non-fatal): %s", exc)
+    return
