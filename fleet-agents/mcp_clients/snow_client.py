@@ -9,6 +9,8 @@ import logging
 import sys
 import os
 
+import config
+
 # Add snow_mcp_server to path for direct import
 snow_server_path = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
@@ -28,7 +30,10 @@ class SnowClient:
 
     async def connect(self) -> None:
         """Initialize SNOW client. No-op for direct import."""
-        logger.info("SnowClient connected (direct import mode)")
+        if config.USE_MOCK_SNOW:
+            logger.info("SnowClient connected (MOCK mode — SR creation disabled)")
+        else:
+            logger.info("SnowClient connected (direct import mode)")
 
     async def disconnect(self) -> None:
         """Disconnect from SNOW. No-op for direct import."""
@@ -55,6 +60,11 @@ class SnowClient:
                 - ritm_number: Request Item number (e.g., "RITM0123456")
                 - ritm_sys_id: Request Item sys_id
         """
+        if config.USE_MOCK_SNOW:
+            sr_number = f"SR-MOCK-{run_id}"
+            logger.info("SNOW mock mode — skipping real SR creation, placeholder=%s", sr_number)
+            return {"sr_number": sr_number, "sr_sys_id": "", "ritm_number": "", "ritm_sys_id": ""}
+
         try:
             # Import here to allow lazy loading
             from snow_client import create_sr

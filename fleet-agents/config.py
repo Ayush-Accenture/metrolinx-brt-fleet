@@ -55,8 +55,8 @@ USE_MOCK_LLM: bool = os.getenv("USE_MOCK_LLM", "true").lower() == "true"
 USE_MOCK_SOTI: bool = os.getenv("USE_MOCK_SOTI", "true").lower() == "true"
 USE_MOCK_HITL: bool = os.getenv("USE_MOCK_HITL", "false").lower() == "true"
 USE_MOCK_COSMOS: bool = os.getenv("USE_MOCK_COSMOS", "true").lower() == "true"
-# Set to false once Storage Blob Data Reader role is confirmed for the runner identity
 USE_MOCK_BLOB: bool = os.getenv("USE_MOCK_BLOB", "true").lower() == "true"
+USE_MOCK_SNOW: bool = os.getenv("USE_MOCK_SNOW", "true").lower() == "true"
 
 # ── SOTI device naming convention ────────────────────────────────────────────
 # Production BRT naming:

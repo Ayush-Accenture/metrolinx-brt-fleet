@@ -153,17 +153,17 @@ class Orchestrator:
             intake_id=intake_id,
             agency="BRT",
             state="RECEIVED",
-            current_step="stage1_trigger",
+            current_step="BIND_INTAKE",
             dva_path=config.SAMPLE_DVA,    # overwritten below when record found
             started_utc=datetime.now(timezone.utc),
         )
         save_run_doc(self.run_doc)
-        cosmos_audit.upsert_run_state(self.run_id, "RECEIVED", "stage1_trigger",
+        cosmos_audit.upsert_run_state(self.run_id, "RECEIVED", "BIND_INTAKE",
                                       {"intake_id": intake_id, "agency": "BRT"})
 
         # ── Stage 1: Check intake record (fmi-db.intake) ─────────────────────
         # Must be READY_FOR_RUN to proceed. No retries — fail immediately if not found.
-        self._transition("ON_HOLD", "stage1_cosmos_check")
+        self._transition("ON_HOLD", "BIND_INTAKE")
 
         intake_record = await get_intake_record(intake_id)
 
@@ -173,18 +173,18 @@ class Orchestrator:
                 "Ensure the intake pipeline has processed today's DVA email before running.",
                 intake_id,
             )
-            self._transition("FAILED", "stage1_cosmos_check",
+            self._transition("FAILED", "BIND_INTAKE",
                              {"reason": "intake record not found or not READY_FOR_RUN",
                               "intake_id": intake_id})
-            append_step(self.run_doc, "stage1_cosmos_check", "FAILED",
+            append_step(self.run_doc, "BIND_INTAKE", "FAILED",
                         {"intake_id": intake_id})
             save_run_doc(self.run_doc)
             return
 
-        self._transition("RECEIVED", "stage1_cosmos_check",
+        self._transition("RECEIVED", "BIND_INTAKE",
                          {"intake_id": intake_id,
                           "dva_blob_uri": intake_record.attachment.blob_uri})
-        append_step(self.run_doc, "stage1_cosmos_check", "DONE",
+        append_step(self.run_doc, "BIND_INTAKE", "DONE",
                     {"intake_id": intake_id,
                      "dva_blob_uri": intake_record.attachment.blob_uri})
         save_run_doc(self.run_doc)
@@ -198,7 +198,7 @@ class Orchestrator:
         )
 
         # ── Stage 2: Build intended-move list from Cosmos DB movement collection ─
-        self._transition("PARSING", "stage2_parse")
+        self._transition("PARSING", "PARSE_DVA")
 
         schema_issues: list[dict] = []
         intended_moves = await get_movements_from_db(self.run_id)
@@ -209,7 +209,7 @@ class Orchestrator:
                 "Ensure the movement collection in fmi-db is populated before running.",
                 self.run_id,
             )
-            self._transition("FAILED", "stage2_parse",
+            self._transition("FAILED", "PARSE_DVA",
                              {"reason": "no movement records in Cosmos DB"})
             save_run_doc(self.run_doc)
             return
@@ -225,7 +225,7 @@ class Orchestrator:
             cosmos_audit.append_hitl_event(self.run_id, "HITL-schema", decision,
                                            context={"issues": len(schema_issues)})
             if decision == "abort":
-                self._transition("ABORTED", "stage2_schema_gate",
+                self._transition("ABORTED", "STRUCTURAL_CHECK",
                                  {"reason": "schema errors", "count": len(schema_issues)})
                 save_run_doc(self.run_doc)
                 log.warning("Run aborted at schema gate | run_id=%s", self.run_id)
@@ -241,12 +241,16 @@ class Orchestrator:
             "sample_moves": sample_moves,
         })
 
-        self._transition("PLANNED", "stage2_parse",
+        self._transition("PLANNED", "PARSE_DVA",
                          {"count": len(intended_moves), "schema_issues": len(schema_issues)})
-        append_step(self.run_doc, "stage2_parse", "DONE", {
+        append_step(self.run_doc, "PARSE_DVA", "DONE", {
             "count": len(intended_moves),
             "schema_issues": len(schema_issues),
             "summary": parser_summary,
+        })
+        save_run_doc(self.run_doc)
+        append_step(self.run_doc, "PLAN_MOVES", "DONE", {
+            "total_moves": len(intended_moves),
         })
         save_run_doc(self.run_doc)
         log.info("Stage 2 complete — %d moves planned, %d schema issues",
@@ -254,7 +258,7 @@ class Orchestrator:
 
         # ── Stage 2b: Enrich moves with current SOTI location (read-only) ────
         # One bulk GET /api/devices call replaces N individual device searches.
-        self.run_doc.current_step = "stage2b_soti_enrich"
+        self.run_doc.current_step = "SOTI_SNAPSHOT"
         save_run_doc(self.run_doc)
 
         t0 = time.monotonic()
@@ -353,7 +357,7 @@ class Orchestrator:
             })
             log.info("Stage 2b triage: %s", triage_2b)
 
-        append_step(self.run_doc, "stage2b_enrich", "DONE",
+        append_step(self.run_doc, "SOTI_SNAPSHOT", "DONE",
                     {"enriched":  len(intended_moves),
                      "pending":   pending_count,
                      "skipped":   skipped_count,
@@ -364,7 +368,7 @@ class Orchestrator:
         save_run_doc(self.run_doc)
 
         # ── Stage 3: HITL pre-move approval ──────────────────────────────────
-        self._transition("AWAITING_PRE_APPROVAL", "stage3_hitl_pre")
+        self._transition("AWAITING_PRE_APPROVAL", "RAISE_HITL2")
 
         # Run MOCK dry-run via brampton.py before showing HITL-2 gate.
         # Operator sees what WOULD happen — no SOTI calls made.
@@ -373,7 +377,7 @@ class Orchestrator:
             intended_moves=[m.model_dump() for m in intended_moves],
             mode="MOCK",
         )
-        append_step(self.run_doc, "stage3_mock_preview", "DONE", {
+        append_step(self.run_doc, "RAISE_HITL2", "DONE", {
             "simulated_moves": len(mock_result.get("moved", [])),
             "workbook_path":   mock_result.get("workbook_path", ""),
         })
@@ -386,8 +390,8 @@ class Orchestrator:
                                        context={"moves": len(intended_moves)})
 
         if decision == "reject":
-            self._transition("ABORTED", "stage3_approval", {"reason": "HITL-2 reject"})
-            append_step(self.run_doc, "stage3_approval", "REJECTED", {})
+            self._transition("ABORTED", "APPROVE_HITL2", {"reason": "HITL-2 reject"})
+            append_step(self.run_doc, "APPROVE_HITL2", "REJECTED", {})
             save_run_doc(self.run_doc)
             return
 
@@ -407,7 +411,7 @@ class Orchestrator:
         })
         log.info("Post-HITL-2 LLM: %s", post_approval_summary)
 
-        append_step(self.run_doc, "stage3_approval", "DONE", {
+        append_step(self.run_doc, "APPROVE_HITL2", "DONE", {
             "decision": decision,
             "approved_count": len(approved_moves),
             "post_decision_summary": post_approval_summary,
@@ -417,7 +421,7 @@ class Orchestrator:
         # ── Stage 4: Execute moves via Fleet Movement MCP (brampton.py) ─────
         # Only PENDING moves (NEEDS_MOVE_TO_LTM / NEEDS_MOVE_TO_PRODUCTION) are sent.
         # SKIPPED moves are already correct; BLOCKED moves cannot be executed.
-        self._transition("MOVING", "stage4_execute")
+        self._transition("MOVING", "MOVE_DEVICES")
 
         pending_moves = [m for m in approved_moves if m.execution_status == "PENDING"]
         skipped_moves = [m for m in approved_moves if m.execution_status == "SKIPPED"]
@@ -447,7 +451,7 @@ class Orchestrator:
                 "run_id": self.run_id,
             })
             log.info("Stage 4 error triage: %s", _diagnosis)
-            append_step(self.run_doc, "stage4_error_triage", "DONE",
+            append_step(self.run_doc, "MOVE_DEVICES_ERROR", "DONE",
                         {"error": _err, "diagnosis": _diagnosis})
             save_run_doc(self.run_doc)
             _err_decision = prompt_hitl_error("brampton.py", _err, self.run_id, _diagnosis)
@@ -457,7 +461,7 @@ class Orchestrator:
                 context={"error": _err},
             )
             if _err_decision != "retry":
-                self._transition("FAILED", "stage4_execute",
+                self._transition("FAILED", "MOVE_DEVICES",
                                  {"reason": "fleet_movement failed", "error": _err})
                 save_run_doc(self.run_doc)
                 await self.soti.disconnect()
@@ -484,7 +488,7 @@ class Orchestrator:
              "unidentified": len(_fleet_unidentified), "workbook_path": _workbook_path},
             duration_ms,
         )
-        append_step(self.run_doc, "stage4_execute", "DONE", {
+        append_step(self.run_doc, "MOVE_DEVICES", "DONE", {
             "moved":         len(_fleet_moved),
             "unmoved":       len(_fleet_unmoved),
             "unidentified":  len(_fleet_unidentified),
@@ -497,7 +501,7 @@ class Orchestrator:
         )
 
         # ── Stage 5: Auto-reconcile (pure code) ──────────────────────────────
-        self._transition("RECONCILING", "stage5_reconcile")
+        self._transition("RECONCILING", "RECONCILE")
 
         # Refresh the bulk lookup after moves to get current locations
         t0 = time.monotonic()
@@ -551,7 +555,7 @@ class Orchestrator:
         output_wb_path = _workbook_path
         log.info("Stage 5 — 5-tab workbook from Stage 4: %s", output_wb_path)
 
-        append_step(self.run_doc, "stage5_reconcile", "DONE", {
+        append_step(self.run_doc, "RECONCILE", "DONE", {
             "moved": len(recon_result.moved),
             "unmoved": len(recon_result.unmoved),
             "unidentified": len(recon_result.unidentified),
@@ -569,7 +573,7 @@ class Orchestrator:
                  len(recon_result.unidentified))
 
         # ── Stage 7: Create Device Monitoring SR in ServiceNow ────────────────
-        self._transition("DRAFTING_SR", "stage7_create_sr")
+        self._transition("DRAFTING_SR", "CREATE_SR")
 
         try:
             sr_short_desc = f"Device Monitoring SR for BRT Fleet Movement {self.run_id}"
@@ -599,7 +603,7 @@ class Orchestrator:
                 {"sr_number": sr_number, "ritm_number": ritm_number},
                 sr_duration_ms,
             )
-            append_step(self.run_doc, "stage7_create_sr", "DONE", {
+            append_step(self.run_doc, "CREATE_SR", "DONE", {
                 "sr_number": sr_number,
                 "sr_sys_id": sr_sys_id,
                 "ritm_number": ritm_number,
@@ -612,7 +616,7 @@ class Orchestrator:
             sr_err = str(sr_exc)
             log.error("Stage 7 — SNOW SR creation failed: %s", sr_err, exc_info=True)
             # Log the error but don't block the pipeline — SR creation is async/best-effort
-            append_step(self.run_doc, "stage7_create_sr", "ERROR", {
+            append_step(self.run_doc, "CREATE_SR", "ERROR", {
                 "error": sr_err,
                 "note": "SR creation failed but pipeline continues",
             })
@@ -622,7 +626,7 @@ class Orchestrator:
         save_run_doc(self.run_doc)
 
         # ── Stage 6: HITL post-move validation ───────────────────────────────
-        self._transition("AWAITING_VALIDATION", "stage6_hitl_validation")
+        self._transition("AWAITING_VALIDATION", "RAISE_HITL3")
 
         decision = prompt_post_move_validation(recon_result, self.run_id)
         append_approval(self.run_doc, "HITL-3", decision, "")
@@ -631,8 +635,8 @@ class Orchestrator:
                                                 "unmoved": len(recon_result.unmoved)})
 
         if decision == "rerun":
-            self._transition("FAILED", "stage6_validation", {"reason": "HITL-3 rerun"})
-            append_step(self.run_doc, "stage6_validation", "RERUN_REQUESTED", {})
+            self._transition("FAILED", "APPROVE_HITL3", {"reason": "HITL-3 rerun"})
+            append_step(self.run_doc, "APPROVE_HITL3", "RERUN_REQUESTED", {})
             save_run_doc(self.run_doc)
             log.warning("Rerun requested by L2 | run_id=%s", self.run_id)
             return
@@ -648,7 +652,7 @@ class Orchestrator:
             "sample_unidentified": recon_result.unidentified[:5],
         })
         log.info("Post-HITL-3 LLM: %s", post_validation_summary)
-        append_step(self.run_doc, "stage6_post_hitl3", "DONE",
+        append_step(self.run_doc, "APPROVE_HITL3", "DONE",
                     {"post_decision_summary": post_validation_summary})
         save_run_doc(self.run_doc)
 
@@ -665,8 +669,8 @@ class Orchestrator:
         })
         log.info("Run summary:\n%s", run_summary)
 
-        self._transition("COMPLETED", "stage6_validation", triggered_by="system")
-        append_step(self.run_doc, "stage6_validation", "COMPLETED", {
+        self._transition("COMPLETED", "COMPLETE", triggered_by="system")
+        append_step(self.run_doc, "COMPLETE", "DONE", {
             "moved": len(recon_result.moved),
             "unmoved": len(recon_result.unmoved),
             "run_summary": run_summary,
