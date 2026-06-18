@@ -22,14 +22,9 @@ RUN pip install --no-cache-dir -r fleet-agents/requirements.txt
 COPY soti_mcp_server/requirements.txt soti_mcp_server/requirements.txt
 RUN pip install --no-cache-dir -r soti_mcp_server/requirements.txt
 
-# ── Install Brampton MCP server dependencies ───────────────────────────────
-COPY brampton_mcp_server/requirements.txt brampton_mcp_server/requirements.txt
-RUN pip install --no-cache-dir -r brampton_mcp_server/requirements.txt
-
 # ── Copy source code ───────────────────────────────────────────────────────
 COPY fleet-agents/ fleet-agents/
 COPY soti_mcp_server/ soti_mcp_server/
-COPY brampton_mcp_server/ brampton_mcp_server/
 
 # Working directory for the pipeline entrypoint
 WORKDIR /app/fleet-agents
@@ -37,9 +32,8 @@ WORKDIR /app/fleet-agents
 # Env defaults
 ENV PYTHONUTF8=1
 ENV PYTHONUNBUFFERED=1
-# Point MCP server CWDs to container paths (override the Windows path defaults in config.py)
+# Point SOTI MCP server CWD to container path (overrides Windows path default in config.py)
 ENV SOTI_MCP_CWD=/app/soti_mcp_server
-ENV FLEET_MCP_CWD=/app/brampton_mcp_server
 
 # All secrets/flags injected at Container Apps Job runtime
 # e.g. USE_MOCK_SOTI, USE_MOCK_LLM, COSMOS_CONNECTION_STRING, etc.

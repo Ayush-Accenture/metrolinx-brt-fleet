@@ -10,6 +10,10 @@ fleet-agents/output
 fleet-agents/state/
 fleet-agents/state
 
+# DVA files (operational data — not baked into image)
+*.xlsx
+*.XLSX
+
 # Local secrets
 **/.env
 !**/.env.example
