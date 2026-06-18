@@ -42,16 +42,6 @@ SOTI_MCP_CWD: str = os.getenv(
 )
 SOTI_MCP_HTTP_URL: str = os.getenv("SOTI_MCP_HTTP_URL", "http://localhost:8000/mcp")
 
-# ── Fleet Movement MCP Server (batch execution — brampton.py) ────────────────
-# Launched as a stdio subprocess by mcp_clients/fleet_client.py.
-# Calls SOTI REST API directly for batch moves (not via SOTI MCP).
-FLEET_MCP_COMMAND: str = os.getenv("FLEET_MCP_COMMAND", "python")
-FLEET_MCP_ARGS: list[str] = os.getenv("FLEET_MCP_ARGS", "server.py").split()
-FLEET_MCP_CWD: str = os.getenv(
-    "FLEET_MCP_CWD",
-    r"C:\Users\ayush.ai.srivastava\OneDrive - Accenture\Ayush Space\projects\metrolinx\brampton_mcp_server",
-)
-
 # ── Cosmos DB for MongoDB vCore (intake record store) ────────────────────
 # Authentication: SCRAM-SHA-256 via connection string.
 # Store the full connection string (including password) ONLY in .env — never in code.
