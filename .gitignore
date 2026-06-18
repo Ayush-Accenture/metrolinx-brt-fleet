@@ -56,9 +56,12 @@ npm-debug.log
 yarn-error.log
 
 # Generated outputs (local runs)
-fleet-agents/output/*.xlsx
-fleet-agents/output/*.json
+fleet-agents/output/
 fleet-agents/state/
+
+# DVA files (sensitive operational data — never commit)
+*.xlsx
+*.XLSX
 ops-dashboard-portal/node_modules/
 ops-dashboard-portal/dist/
 
