@@ -168,24 +168,35 @@ async def get_movements_from_db(run_id: str) -> list[IntendedMove]:
 
         moves: list[IntendedMove] = []
         for doc in docs:
-            dva = doc.get("dva", {})
-            bus = str(dva.get("busNumber", "")).strip()
+            dva     = doc.get("dva", {})
+            plan    = doc.get("plan", {})
+            overlay = doc.get("overlay", {})
+
+            bus    = str(dva.get("busNumber", "")).strip()
             status = str(dva.get("vehicleStatus", "")).strip()
-
-            if not bus or not status:
-                continue
-
-            # Derive target folder from vehicle status (same logic as excel_parser)
-            s = status.lower()
-            if s in ("on", "in maintenance"):
-                target: str = "Production"
-            elif any(kw in s for kw in ("off-site", "ltm")):
+            target = str(plan.get("targetFolder", "")).strip()  # "Production" | "LTM"
+            # Normalise case — DB may store "PRODUCTION", "production", etc.
+            target_lower = target.lower()
+            if target_lower in ("production", "prod"):
+                target = "Production"
+            elif target_lower == "ltm":
                 target = "LTM"
-            else:
-                log.warning("Unrecognised vehicleStatus '%s' for bus %s — skipping", status, bus)
+
+            # Skip excluded buses (operator override in the portal)
+            if overlay.get("excluded", False):
+                log.info("Skipping bus %s — overlay.excluded=true", bus)
                 continue
 
-            # Derive device names using per-type suffix convention:
+            if not bus or not target:
+                log.warning("Skipping movement doc '%s' — missing busNumber or plan.targetFolder",
+                            doc.get("_id", "?"))
+                continue
+
+            if target not in ("Production", "LTM"):
+                log.warning("Unrecognised plan.targetFolder '%s' for bus %s — skipping", target, bus)
+                continue
+
+            # Build device names from bus number + per-type suffix convention:
             #   DCU:  BRT_DCU_{bus}_1  (SOTI_DCU_SUFFIX=_1)
             #   BFTP: BRT_BFTP_{bus}_2 (SOTI_BFTP_SUFFIX=_2)
             bus_padded = bus.lstrip("0").zfill(config.SOTI_BUS_DIGITS) if bus.isdigit() else bus
@@ -199,7 +210,7 @@ async def get_movements_from_db(run_id: str) -> list[IntendedMove]:
                     device_type=dev_type,  # type: ignore[arg-type]
                     target_folder=target,  # type: ignore[arg-type]
                     vehicle_status=status,
-                    reason=f"[{dev_type}] Status '{status}' maps to {target} (from Cosmos DB)",
+                    reason=f"[{dev_type}] plan.targetFolder='{target}' (from Cosmos DB)",
                 ))
 
         log.info(

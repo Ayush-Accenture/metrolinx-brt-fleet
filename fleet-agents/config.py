@@ -49,6 +49,7 @@ COSMOS_CONNECTION_STRING: str = os.getenv("COSMOS_CONNECTION_STRING", "")
 COSMOS_DATABASE: str = os.getenv("COSMOS_DATABASE", "fmi-db")
 COSMOS_INTAKE_COLLECTION: str = os.getenv("COSMOS_INTAKE_COLLECTION", "intake")
 COSMOS_MOVEMENT_COLLECTION: str = os.getenv("COSMOS_MOVEMENT_COLLECTION", "movement")
+COSMOS_RUNS_COLLECTION: str = os.getenv("COSMOS_RUNS_COLLECTION", "runs")
 
 # ── Mock flags — flip to False when real access lands ────────────────────────
 USE_MOCK_LLM: bool = os.getenv("USE_MOCK_LLM", "true").lower() == "true"

@@ -132,6 +132,7 @@ class Orchestrator:
         self.run_doc.state = new_state
         self.run_doc.current_step = step
         save_run_doc(self.run_doc)
+        cosmos_audit.mark_step_started(self.run_id, step)
         cosmos_audit.upsert_run_state(self.run_id, new_state, step)
         cosmos_audit.append_checkpoint(
             self.run_id, prev, new_state, triggered_by, payload or {}
@@ -243,6 +244,8 @@ class Orchestrator:
 
         self._transition("PLANNED", "PARSE_DVA",
                          {"count": len(intended_moves), "schema_issues": len(schema_issues)})
+        cosmos_audit.mark_step_started(self.run_id, "STRUCTURAL_CHECK")
+        cosmos_audit.upsert_run_state(self.run_id, "PLANNED", "STRUCTURAL_CHECK")
         append_step(self.run_doc, "PARSE_DVA", "DONE", {
             "count": len(intended_moves),
             "schema_issues": len(schema_issues),
@@ -268,8 +271,13 @@ class Orchestrator:
             self.run_doc, "soti.build_device_lookup (bulk)",
             {}, {"device_count": len(device_lookup)}, lookup_ms,
         )
+        cosmos_audit.append_tool_call(
+            self.run_id, "soti.build_device_lookup (bulk)",
+            {}, {"device_count": len(device_lookup)}, lookup_ms,
+        )
         log.info("Stage 2b — bulk SOTI lookup: %d devices fetched in %dms",
                  len(device_lookup), lookup_ms)
+        cosmos_audit.append_snapshot(self.run_id, "SOTI_SNAPSHOT", device_lookup)
 
         for move in intended_moves:
             device_info = self.soti.get_device_from_lookup(device_lookup, move.current_device)
@@ -357,6 +365,8 @@ class Orchestrator:
             })
             log.info("Stage 2b triage: %s", triage_2b)
 
+        cosmos_audit.mark_step_started(self.run_id, "SOTI_SNAPSHOT")
+        cosmos_audit.upsert_run_state(self.run_id, "PLANNED", "SOTI_SNAPSHOT")
         append_step(self.run_doc, "SOTI_SNAPSHOT", "DONE",
                     {"enriched":  len(intended_moves),
                      "pending":   pending_count,
@@ -411,6 +421,8 @@ class Orchestrator:
         })
         log.info("Post-HITL-2 LLM: %s", post_approval_summary)
 
+        cosmos_audit.mark_step_started(self.run_id, "APPROVE_HITL2")
+        cosmos_audit.upsert_run_state(self.run_id, "AWAITING_PRE_APPROVAL", "APPROVE_HITL2")
         append_step(self.run_doc, "APPROVE_HITL2", "DONE", {
             "decision": decision,
             "approved_count": len(approved_moves),
@@ -488,6 +500,13 @@ class Orchestrator:
              "unidentified": len(_fleet_unidentified), "workbook_path": _workbook_path},
             duration_ms,
         )
+        cosmos_audit.append_tool_call(
+            self.run_id, "fleet.run_fleet_movement",
+            {"run_id": self.run_id, "mode": "LIVE", "move_count": len(approved_moves)},
+            {"moved": len(_fleet_moved), "unmoved": len(_fleet_unmoved),
+             "unidentified": len(_fleet_unidentified), "workbook_path": _workbook_path},
+            duration_ms,
+        )
         append_step(self.run_doc, "MOVE_DEVICES", "DONE", {
             "moved":         len(_fleet_moved),
             "unmoved":       len(_fleet_unmoved),
@@ -509,6 +528,9 @@ class Orchestrator:
         lookup_ms = int((time.monotonic() - t0) * 1000)
         append_tool_call(self.run_doc, "soti.build_device_lookup (reconcile)",
                          {}, {"device_count": len(post_move_lookup)}, lookup_ms)
+        cosmos_audit.append_tool_call(self.run_id, "soti.build_device_lookup (reconcile)",
+                                      {}, {"device_count": len(post_move_lookup)}, lookup_ms)
+        cosmos_audit.append_snapshot(self.run_id, "RECONCILE", post_move_lookup)
 
         actual_locations: dict[str, str] = {}
         for move in approved_moves:
@@ -567,6 +589,14 @@ class Orchestrator:
             "unmoved_list": recon_result.unmoved,
             "unidentified_list": recon_result.unidentified,
         })
+        cosmos_audit.upsert_run_state(
+            self.run_id, "RECONCILING", "RECONCILE",
+            extra={
+                "counts.moved":        len(recon_result.moved),
+                "counts.unmoved":      len(recon_result.unmoved),
+                "counts.unidentified": len(recon_result.unidentified),
+            },
+        )
         save_run_doc(self.run_doc)
         log.info("Stage 5 complete — %d moved, %d unmoved, %d unidentified",
                  len(recon_result.moved), len(recon_result.unmoved),
@@ -603,11 +633,21 @@ class Orchestrator:
                 {"sr_number": sr_number, "ritm_number": ritm_number},
                 sr_duration_ms,
             )
+            cosmos_audit.append_tool_call(
+                self.run_id, "snow.create_device_monitoring_sr",
+                {"run_id": self.run_id, "moved": len(recon_result.moved)},
+                {"sr_number": sr_number, "ritm_number": ritm_number},
+                sr_duration_ms,
+            )
             append_step(self.run_doc, "CREATE_SR", "DONE", {
                 "sr_number": sr_number,
                 "sr_sys_id": sr_sys_id,
                 "ritm_number": ritm_number,
             })
+            cosmos_audit.upsert_run_state(
+                self.run_id, "DRAFTING_SR", "CREATE_SR",
+                extra={"outputs.srNumber": sr_number},
+            )
             log.info(
                 "Stage 7 complete — SNOW SR created: sr_number=%s ritm_number=%s",
                 sr_number, ritm_number,
@@ -652,6 +692,8 @@ class Orchestrator:
             "sample_unidentified": recon_result.unidentified[:5],
         })
         log.info("Post-HITL-3 LLM: %s", post_validation_summary)
+        cosmos_audit.mark_step_started(self.run_id, "APPROVE_HITL3")
+        cosmos_audit.upsert_run_state(self.run_id, "AWAITING_VALIDATION", "APPROVE_HITL3")
         append_step(self.run_doc, "APPROVE_HITL3", "DONE",
                     {"post_decision_summary": post_validation_summary})
         save_run_doc(self.run_doc)
