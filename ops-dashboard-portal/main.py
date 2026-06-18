@@ -238,7 +238,7 @@ async def submit_decision(
 def ask_question(run_id: str, question: str = Form(...)):
     """Conversational Q&A over a single run's data (grounded in run context)."""
     try:
-        from agents.super_agents import QAAgent
+        from agents.portal import QAAgent
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(
             {"error": f"QA agent unavailable: {exc}"}, status_code=503
@@ -259,7 +259,7 @@ def nl_edit(run_id: str, instruction: str = Form(...)):
     operator still submits the actual decision via /decision.
     """
     try:
-        from agents.super_agents import NLEditAgent
+        from agents.portal import NLEditAgent
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(
             {"error": f"NL-edit agent unavailable: {exc}"}, status_code=503

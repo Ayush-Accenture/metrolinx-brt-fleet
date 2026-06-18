@@ -17,11 +17,13 @@ import logging
 from datetime import datetime, timezone
 
 import config
-from agents.sub_agents.parser_narrator import ParserNarrator
-from agents.sub_agents.reconciliation_narrator import ReconciliationNarrator
-from agents.sub_agents.exception_triage import ExceptionTriageAgent
-from agents.sub_agents.summary_narrator import RunSummaryNarrator
-from agents.sub_agents.error_triage import ErrorTriageAgent
+from agents.narrators import (
+    ParserNarrator,
+    ReconciliationNarrator,
+    ExceptionTriageAgent,
+    RunSummaryNarrator,
+    ErrorTriageAgent,
+)
 from mcp_clients.soti_client import SotiMcpClient
 from mcp_clients.fleet_client import FleetMovementClient
 from mcp_clients.snow_client import SnowClient
