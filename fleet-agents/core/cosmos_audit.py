@@ -302,3 +302,106 @@ def append_move_exception(run_id: str, device: str, intended_folder: str,
         log.debug("cosmos_audit.append_move_exception: run=%s device=%s", run_id, device)
     except Exception:
         log.exception("cosmos_audit.append_move_exception failed (non-fatal): run=%s", run_id)
+
+
+def mark_hitl_pending(run_id: str, gate: str, payload: dict) -> None:
+    """
+    Mark a HITL gate as PENDING in Cosmos with its payload.
+    Called by hitl_console when the pipeline raises a gate.
+    The portal reads this to render the approval UI.
+
+    Strategy: try to update an existing hitl[] entry first (arrayFilters).
+    If the document has no hitl[] array or no entry for this gate yet
+    (matched_count == 0 / modified_count == 0), push a new entry so the
+    gate is always visible regardless of whether intake pre-populated hitl[].
+    """
+    try:
+        now = _ts()
+        result = _col().update_one(
+            {"_id": run_id},
+            {
+                "$set": {
+                    "hitl.$[elem].status":    "PENDING",
+                    "hitl.$[elem].raisedUtc": now,
+                    "hitl.$[elem].payload":   payload,
+                    "updatedUtc":             now,
+                }
+            },
+            array_filters=[{"elem.gate": gate}],
+        )
+        # If no existing entry was updated, push a new gate entry into hitl[]
+        if result.modified_count == 0:
+            new_entry = {
+                "gate":       gate,
+                "status":     "PENDING",
+                "raisedUtc":  now,
+                "payload":    payload,
+                "decidedUtc": None,
+                "decidedBy":  None,
+                "decidedDecision": None,
+                "decisionNote":    None,
+            }
+            _col().update_one(
+                {"_id": run_id},
+                {"$push": {"hitl": new_entry}, "$set": {"updatedUtc": now}},
+                upsert=True,
+            )
+            log.debug("cosmos_audit.mark_hitl_pending: pushed new entry run=%s gate=%s", run_id, gate)
+        else:
+            log.debug("cosmos_audit.mark_hitl_pending: updated existing run=%s gate=%s", run_id, gate)
+    except Exception:
+        log.exception("cosmos_audit.mark_hitl_pending failed (non-fatal): run=%s", run_id)
+
+
+def record_hitl_decision(run_id: str, gate: str, decision: str,
+                         decided_by: str = "ops-portal", note: str = "") -> None:
+    """
+    Write operator decision to hitl[] in Cosmos.
+    Called by the ops portal after the operator approves/rejects.
+    Stores both the raw decision string (decidedDecision) and the computed
+    status (APPROVED / REJECTED / etc.) so the pipeline can poll either.
+    """
+    try:
+        now = _ts()
+        status = _DECISION_STATUS.get(decision, decision.upper())
+        _col().update_one(
+            {"_id": run_id},
+            {
+                "$set": {
+                    "hitl.$[elem].status":           status,
+                    "hitl.$[elem].decidedDecision":  decision,
+                    "hitl.$[elem].decidedUtc":       now,
+                    "hitl.$[elem].decidedBy":        decided_by,
+                    "hitl.$[elem].decisionNote":     note or None,
+                    "updatedUtc":                    now,
+                }
+            },
+            array_filters=[{"elem.gate": gate}],
+        )
+        log.debug("cosmos_audit.record_hitl_decision: run=%s gate=%s decision=%s",
+                  run_id, gate, decision)
+    except Exception:
+        log.exception("cosmos_audit.record_hitl_decision failed (non-fatal): run=%s", run_id)
+
+
+def poll_hitl_decision(run_id: str, gate: str) -> str | None:
+    """
+    Return the raw decision string if the gate has been decided, or None if
+    the gate is still PENDING (or not yet raised).
+    Used by hitl_console to poll Cosmos instead of the local decision file.
+    Falls back gracefully — any exception returns None so local-file polling
+    continues to work as a backup.
+    """
+    try:
+        doc = _col().find_one({"_id": run_id}, {"hitl": 1})
+        if not doc:
+            return None
+        for entry in doc.get("hitl", []):
+            if entry.get("gate") == gate and entry.get("status") not in (None, "PENDING"):
+                # Return the raw decision string the portal submitted; fall back
+                # to lowercased status if the field is missing (legacy records).
+                return entry.get("decidedDecision") or entry.get("status", "").lower()
+        return None
+    except Exception:
+        log.exception("cosmos_audit.poll_hitl_decision failed (non-fatal): run=%s", run_id)
+        return None

@@ -45,7 +45,10 @@ _FRONTEND_DIST = _PORTAL_DIR / "frontend" / "dist"
 # Azure OpenAI key and USE_MOCK_* flags.
 if str(_FLEET_DIR) not in sys.path:
     sys.path.insert(0, str(_FLEET_DIR))
-load_dotenv(_FLEET_DIR / ".env")
+# Load fleet-agents/.env only when it exists (local dev).
+# In Azure App Service the env vars are injected via Application Settings.
+if (_FLEET_DIR / ".env").exists():
+    load_dotenv(_FLEET_DIR / ".env")
 
 
 def _as_count(value) -> int:
@@ -112,8 +115,40 @@ app.add_middleware(
 
 # -- Helpers -------------------------------------------------------------------
 
+def _cosmos_run_to_dict(doc: dict) -> dict:
+    """
+    Normalise a Cosmos `runs` document to the same shape the frontend expects.
+    Cosmos stores camelCase keys; local run_*.json files use snake_case.
+    We expose camelCase to the frontend (matches what orchestrator writes).
+    MongoDB ObjectId (_id) is the run_id string — just pass it through.
+    """
+    if doc is None:
+        return {}
+    # Remove internal MongoDB _id to avoid serialisation issues; expose as run_id
+    doc = dict(doc)
+    if "_id" in doc and "run_id" not in doc:
+        doc["run_id"] = doc["_id"]
+    doc.pop("_id", None)
+    return doc
+
+
 def _load_all_runs() -> list[dict]:
-    """Load all run documents from output dir, newest first."""
+    """
+    Load all run documents, newest first.
+    Primary: Cosmos DB `runs` collection (works in Azure).
+    Fallback: local output/run_*.json files (works on same machine as pipeline).
+    """
+    import os as _os
+    if _os.getenv("USE_MOCK_COSMOS", "false").lower() != "true":
+        try:
+            from core.cosmos_audit import _col
+            docs = list(_col().find({}, {"toolCalls": 0, "snapshots": 0})
+                        .sort("_id", -1).limit(50))
+            if docs:
+                return [_cosmos_run_to_dict(d) for d in docs]
+        except Exception:
+            pass  # fall through to local files
+
     runs = []
     for path in sorted(_OUTPUT_DIR.glob("run_*.json"), reverse=True):
         try:
@@ -125,6 +160,21 @@ def _load_all_runs() -> list[dict]:
 
 
 def _load_run(run_id: str) -> dict | None:
+    """
+    Load a single run document.
+    Primary: Cosmos DB (works in Azure).
+    Fallback: local output/run_{run_id}.json (works on same machine as pipeline).
+    """
+    import os as _os
+    if _os.getenv("USE_MOCK_COSMOS", "false").lower() != "true":
+        try:
+            from core.cosmos_audit import _col
+            doc = _col().find_one({"_id": run_id})
+            if doc:
+                return _cosmos_run_to_dict(doc)
+        except Exception:
+            pass  # fall through to local file
+
     path = _OUTPUT_DIR / f"run_{run_id}.json"
     if not path.exists():
         return None
@@ -133,7 +183,30 @@ def _load_run(run_id: str) -> dict | None:
 
 
 def _pending_gate(run_id: str) -> dict | None:
-    """Return the first pending HITL gate for this run, or None."""
+    """
+    Return the first pending HITL gate for this run, or None.
+    Checks Cosmos first (works when pipeline runs in Azure), then local files
+    (works when pipeline runs on the same machine as the portal).
+    """
+    # --- Primary: query Cosmos runs document ---
+    try:
+        import os as _os
+        if _os.getenv("USE_MOCK_COSMOS", "false").lower() != "true":
+            from core.cosmos_audit import _col  # reuse cached connection
+            doc = _col().find_one({"_id": run_id}, {"hitl": 1})
+            if doc:
+                for entry in doc.get("hitl", []):
+                    if entry.get("status") == "PENDING":
+                        return {
+                            "run_id": run_id,
+                            "gate":    entry.get("gate"),
+                            "payload": entry.get("payload", {}),
+                            "status":  "pending",
+                        }
+    except Exception:
+        pass  # fall through to local file
+
+    # --- Fallback: local pending file (same-machine / local dev) ---
     for path in sorted(_OUTPUT_DIR.glob(f"hitl_pending_{run_id}_*.json")):
         try:
             with open(path, encoding="utf-8") as f:
@@ -201,7 +274,7 @@ async def submit_decision(
     note: str = Form(""),
     subset_indices: str = Form(""),
 ):
-    """L2 submits a HITL gate decision. Writes decision file, removes pending file."""
+    """L2 submits a HITL gate decision. Writes decision to Cosmos and local file."""
     safe_gate     = gate.replace(":", "_")
     decision_path = _OUTPUT_DIR / f"hitl_decision_{run_id}_{safe_gate}.json"
     pending_path  = _OUTPUT_DIR / f"hitl_pending_{run_id}_{safe_gate}.json"
@@ -219,6 +292,24 @@ async def submit_decision(
         "decided_by":  "L2-ops-portal",
     }
 
+    # --- Primary: write decision to Cosmos so pipeline can poll it in Azure ---
+    try:
+        import os as _os
+        if _os.getenv("USE_MOCK_COSMOS", "false").lower() != "true":
+            from core.cosmos_audit import record_hitl_decision
+            record_hitl_decision(
+                run_id=run_id,
+                gate=gate,
+                decision=decision,
+                decided_by="L2-ops-portal",
+                note=note,
+            )
+    except Exception as _exc:  # noqa: BLE001
+        # Non-fatal — local file fallback still works
+        import logging
+        logging.getLogger(__name__).warning("Cosmos record_hitl_decision failed: %s", _exc)
+
+    # --- Fallback: write local decision file (supports local dev / same-machine runs) ---
     _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     with open(decision_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)

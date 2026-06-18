@@ -1,0 +1,4 @@
+{
+  "error": "Client error '403 Forbidden' for url 'https://20.220.205.86/MobiControl/api/devices/search?groupPath=%2F%2FPresto%2FBrampton+Transit%28BRT%29%2F1.Production&includeSubgroups=true&verifyAndSync=false'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/403",
+  "tool": "search_devices_by_group_path_flat"
+}

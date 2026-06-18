@@ -52,12 +52,12 @@ COSMOS_MOVEMENT_COLLECTION: str = os.getenv("COSMOS_MOVEMENT_COLLECTION", "movem
 COSMOS_RUNS_COLLECTION: str = os.getenv("COSMOS_RUNS_COLLECTION", "runs")
 
 # ── Mock flags — flip to False when real access lands ────────────────────────
-USE_MOCK_LLM: bool = os.getenv("USE_MOCK_LLM", "true").lower() == "true"
-USE_MOCK_SOTI: bool = os.getenv("USE_MOCK_SOTI", "true").lower() == "true"
+USE_MOCK_LLM: bool = os.getenv("USE_MOCK_LLM", "false").lower() == "true"
+USE_MOCK_SOTI: bool = os.getenv("USE_MOCK_SOTI", "false").lower() == "true"
 USE_MOCK_HITL: bool = os.getenv("USE_MOCK_HITL", "false").lower() == "true"
-USE_MOCK_COSMOS: bool = os.getenv("USE_MOCK_COSMOS", "true").lower() == "true"
-USE_MOCK_BLOB: bool = os.getenv("USE_MOCK_BLOB", "true").lower() == "true"
-USE_MOCK_SNOW: bool = os.getenv("USE_MOCK_SNOW", "true").lower() == "true"
+USE_MOCK_COSMOS: bool = os.getenv("USE_MOCK_COSMOS", "false").lower() == "true"
+USE_MOCK_BLOB: bool = os.getenv("USE_MOCK_BLOB", "false").lower() == "true"
+USE_MOCK_SNOW: bool = os.getenv("USE_MOCK_SNOW", "false").lower() == "true"
 
 # ── SOTI device naming convention ────────────────────────────────────────────
 # Production BRT naming:
@@ -91,3 +91,6 @@ AZURE_STORAGE_ACCOUNT_KEY: str = os.getenv("AZURE_STORAGE_ACCOUNT_KEY", "")
 # over AzureCliCredential and account key. Generate via Azure portal or CLI.
 # Format: ?sp=r&st=...&se=...&sig=...
 AZURE_STORAGE_SAS_URL: str = os.getenv("AZURE_STORAGE_SAS_URL", "")
+# Storage account name and output container for blob uploads
+AZURE_STORAGE_ACCOUNT_NAME: str = os.getenv("AZURE_STORAGE_ACCOUNT_NAME", "agenticaidashboardsa")
+AZURE_BLOB_OUTPUT_CONTAINER: str = os.getenv("AZURE_BLOB_OUTPUT_CONTAINER", "fmi")

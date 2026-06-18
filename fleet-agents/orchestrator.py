@@ -36,6 +36,7 @@ from core.state_store import (
     append_approval,
 )
 import core.cosmos_audit as cosmos_audit
+import core.blob_store as blob_store
 from schemas.run_doc import RunDoc
 from tools.hitl_console import (
     prompt_missing_dva,
@@ -159,8 +160,7 @@ class Orchestrator:
             started_utc=datetime.now(timezone.utc),
         )
         save_run_doc(self.run_doc)
-        cosmos_audit.upsert_run_state(self.run_id, "RECEIVED", "BIND_INTAKE",
-                                      {"intake_id": intake_id, "agency": "BRT"})
+        cosmos_audit.upsert_run_state(self.run_id, "RECEIVED", "BIND_INTAKE")
 
         # ── Stage 1: Check intake record (fmi-db.intake) ─────────────────────
         # Must be READY_FOR_RUN to proceed. No retries — fail immediately if not found.
@@ -518,6 +518,20 @@ class Orchestrator:
             "Stage 4 complete — brampton.py: moved=%d unmoved=%d unidentified=%d | workbook=%s",
             len(_fleet_moved), len(_fleet_unmoved), len(_fleet_unidentified), _workbook_path,
         )
+
+        # ── Upload workbook to Blob Storage ───────────────────────────────
+        _workbook_blob_uri = ""
+        try:
+            _workbook_blob_uri = blob_store.upload_workbook(_workbook_path, self.run_id)
+            if _workbook_blob_uri:
+                cosmos_audit.upsert_run_state(
+                    self.run_id, "MOVING", "MOVE_DEVICES",
+                    extra={"outputs.workbookBlobUri": _workbook_blob_uri},
+                )
+                log.info("Stage 4 — workbook uploaded: %s", _workbook_blob_uri)
+        except Exception:
+            log.exception("Stage 4 — blob upload failed (non-fatal), continuing")
+            _workbook_blob_uri = ""
 
         # ── Stage 5: Auto-reconcile (pure code) ──────────────────────────────
         self._transition("RECONCILING", "RECONCILE")

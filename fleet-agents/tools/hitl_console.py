@@ -35,12 +35,16 @@ def _auto(label: str, value: str) -> str:
 
 def _web_hitl(gate: str, run_id: str, payload: dict, default: str) -> str:
     """
-    Web HITL bridge — write a pending file, open the portal in the browser,
-    then poll until the portal writes the decision file.
+    Web HITL bridge — write a pending file and mark Cosmos, open the portal in
+    the browser, then poll Cosmos (primary) and the local decision file (fallback)
+    until a decision is received.
 
-    Pending file : output/hitl_pending_{run_id}_{gate}.json
-    Decision file: output/hitl_decision_{run_id}_{gate}.json
+    Pending file : output/hitl_pending_{run_id}_{gate}.json  (local fallback)
+    Decision file: output/hitl_decision_{run_id}_{gate}.json (local fallback)
+    Cosmos       : runs.hitl[gate].status / decidedDecision  (primary)
     """
+    import core.cosmos_audit as cosmos_audit
+
     os.makedirs(config.OUTPUT_DIR, exist_ok=True)
     safe_gate = gate.replace(":", "_")
     pending_path  = os.path.join(config.OUTPUT_DIR, f"hitl_pending_{run_id}_{safe_gate}.json")
@@ -50,10 +54,13 @@ def _web_hitl(gate: str, run_id: str, payload: dict, default: str) -> str:
     if os.path.exists(decision_path):
         os.remove(decision_path)
 
-    # Write the pending gate so the portal can render it
+    # Write the pending gate so the portal can render it (local + Cosmos)
+    pending_doc = {"run_id": run_id, "gate": gate, "payload": payload,
+                   "default": default, "status": "pending"}
     with open(pending_path, "w", encoding="utf-8") as f:
-        json.dump({"run_id": run_id, "gate": gate, "payload": payload,
-                   "default": default, "status": "pending"}, f, indent=2, default=str)
+        json.dump(pending_doc, f, indent=2, default=str)
+    if not config.USE_MOCK_COSMOS:
+        cosmos_audit.mark_hitl_pending(run_id, gate, payload)
 
     portal_url = f"{config.OPS_PORTAL_URL}/runs/{run_id}"
     console.print(Panel(
@@ -67,14 +74,26 @@ def _web_hitl(gate: str, run_id: str, payload: dict, default: str) -> str:
     ))
     webbrowser.open(portal_url)
 
-    # Poll every 2 seconds for up to 30 minutes
-    for _ in range(900):
-        time.sleep(2)
+    # Poll every 5 seconds for up to 30 minutes.
+    # Check Cosmos first (works in Azure); fall back to local file (works locally).
+    for _ in range(360):
+        time.sleep(5)
+
+        # --- Primary: Cosmos poll ---
+        if not config.USE_MOCK_COSMOS:
+            cosmos_decision = cosmos_audit.poll_hitl_decision(run_id, gate)
+            if cosmos_decision:
+                console.print(f"[green]Cosmos decision received:[/green] {cosmos_decision}")
+                if os.path.exists(pending_path):
+                    os.remove(pending_path)
+                return cosmos_decision
+
+        # --- Fallback: local file poll ---
         if os.path.exists(decision_path):
             with open(decision_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             decision = data.get("decision", default)
-            console.print(f"[green]Portal decision received:[/green] {decision}")
+            console.print(f"[green]Portal decision received (local):[/green] {decision}")
             if os.path.exists(pending_path):
                 os.remove(pending_path)
             return decision

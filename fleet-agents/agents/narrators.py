@@ -38,7 +38,7 @@ class _Base:
     def _complete(self, system_prompt: str, user_content: str, *,
                   json_mode: bool = False, max_tokens: int = 1024,
                   temperature: float = 0.3) -> str:
-        from openai import BadRequestError
+        from openai import BadRequestError, RateLimitError
         client = self._get_client()
         kwargs: dict = {
             "model": config.AZURE_OPENAI_DEPLOYMENT,
@@ -52,16 +52,22 @@ class _Base:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
-        for _ in range(4):
+        for attempt in range(4):
             try:
                 response = client.chat.completions.create(**kwargs)
                 return response.choices[0].message.content or ""
+            except RateLimitError:
+                import time
+                wait = 2 ** attempt  # 1s, 2s, 4s, 8s
+                log.warning("LLM rate limit (429) — waiting %ds before retry %d/4", wait, attempt + 1)
+                time.sleep(wait)
             except BadRequestError as exc:
                 dropped = self._drop_unsupported_param(kwargs, exc)
                 if not dropped:
                     raise
                 log.warning("LLM param '%s' unsupported — retrying without it", dropped)
-        return client.chat.completions.create(**kwargs).choices[0].message.content or ""
+        log.error("LLM rate limit persists after 4 retries — returning fallback narration")
+        return f"[{self.name}] LLM unavailable (rate limit) — narrative skipped."
 
     @staticmethod
     def _drop_unsupported_param(kwargs: dict, exc: "Exception") -> str | None:
