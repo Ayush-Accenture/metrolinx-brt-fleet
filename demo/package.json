@@ -1,0 +1,13 @@
+{
+  "name": "pds-agentic-operations-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mock UI for the PDS Agentic Operations fleet-information-management pipeline with human-in-the-loop (HITL) approval gates.",
+  "scripts": {
+    "start": "npx --yes serve@latest -l 5173 .",
+    "dev": "npx --yes serve@latest -l 5173 .",
+    "preview": "npx --yes serve@latest -l 5173 ."
+  },
+  "keywords": ["metrolinx", "agentic", "dashboard", "hitl", "fleet", "demo"],
+  "license": "UNLICENSED"
+}

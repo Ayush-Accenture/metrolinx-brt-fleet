@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PDS Agentic Operations — Fleet Information Management</title>
+<meta name="description" content="PDS Agentic Operations dashboard: monitor the automated nightly DVA fleet-device processing pipeline with human-in-the-loop (HITL) approval gates." />
+<meta name="theme-color" content="#4f46e5" />
+<meta name="color-scheme" content="light" />
+
+<!-- Open Graph / social preview -->
+<meta property="og:type" content="website" />
+<meta property="og:title" content="PDS Agentic Operations" />
+<meta property="og:description" content="Automated nightly DVA processing pipeline with HITL approval gates." />
+
+<!-- Inline SVG favicon (no extra request) -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+<link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+
+<nav class="navbar" role="banner">
+  <div class="brand">PDS <span>Agentic</span> Operations</div>
+  <div class="navbar-right">
+    <label class="sr-only" for="usecaseSelect">Select use case</label>
+    <select class="usecase-select" id="usecaseSelect" aria-label="Select use case">
+      <option>Fleet Information Management — BRT Brampton</option>
+      <option>Fleet Information Management — MiWay</option>
+      <option>Device Health Monitoring — BRT</option>
+      <option>Incident Auto-Resolution — GO Transit</option>
+    </select>
+    <button class="icon-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle light / dark theme" aria-label="Toggle light or dark theme">🌙</button>
+    <button class="icon-btn notif-btn" onclick="togglePanel()" title="HITL Notifications"
+            aria-label="Open HITL notifications" aria-controls="hitlPanel" aria-expanded="false" id="notifBtn">
+      🔔
+      <span class="notif-badge" id="notifBadge">1</span>
+    </button>
+  </div>
+</nav>
+
+<button class="hitl-banner" id="hitlBanner" onclick="togglePanel()" aria-controls="hitlPanel">
+  <span aria-hidden="true">⚠️</span>
+  <div>
+    <strong id="bannerTitle">Action Required — HITL-2: Pre-Move Approval</strong>
+    <div class="banner-meta" id="bannerMeta">Fleet Movement Plan for BRT Brampton (Jun 17, 2026) is awaiting your review before execution begins.</div>
+  </div>
+  <span class="banner-cta">Review Now →</span>
+</button>
+
+<div class="main-wrap" id="mainWrap">
+  <main class="content">
+
+    <header class="page-header">
+      <h1>Fleet Information Management — BRT Brampton</h1>
+      <p>Automated nightly DVA processing pipeline</p>
+      <div class="run-meta">
+        <div class="meta-pill">📅 <strong>Jun 17, 2026</strong></div>
+        <div class="meta-pill">🆔 Run: <strong>run_BRT_2026-06-17</strong></div>
+        <div class="meta-pill">⏱ Started: <strong>12:01 AM</strong></div>
+        <div class="meta-pill">🔄 Status: <strong class="status-amber" id="runStatus">Awaiting HITL-2 Approval</strong></div>
+        <button class="reset-btn" onclick="resetSimulation()" title="Reset the pipeline to the first stage">↻ Reset simulation</button>
+      </div>
+    </header>
+
+    <section class="pipeline-wrap" aria-label="Pipeline stages">
+      <div class="pipeline-top">
+        <div class="pipeline-progress-label">Pipeline progress <span id="progressCount">5 / 12</span></div>
+        <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+      </div>
+      <div class="pipeline-legend">
+        <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div> Completed</div>
+        <div class="legend-item"><div class="legend-dot" style="background:var(--amber);border-radius:2px"></div> HITL Gate (Human)</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#cbd0da"></div> System / AI Step</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#fff;border:2px dashed var(--amber-br)"></div> HITL (Upcoming)</div>
+      </div>
+      <div class="pipeline-scroll-outer">
+        <button class="scroll-arrow" id="scrollLeft" onclick="scrollPipeline(-1)" title="Scroll left" aria-label="Scroll pipeline left">&#8249;</button>
+        <div class="pipeline-scroll-inner" id="pipelineScroll">
+          <div class="pipeline" id="pipeline"></div>
+        </div>
+        <button class="scroll-arrow" id="scrollRight" onclick="scrollPipeline(1)" title="Scroll right" aria-label="Scroll pipeline right">&#8250;</button>
+      </div>
+      <div class="scroll-hint">
+        ← drag the scrollbar or use the arrows to see all 12 stages →
+      </div>
+    </section>
+
+    <section class="detail-card" id="detailCard" aria-live="polite"></section>
+  </main>
+</div>
+
+<!-- Click-away overlay for the slide-over panel -->
+<div class="panel-overlay" id="panelOverlay" onclick="togglePanel()" hidden></div>
+
+<!-- Toast notifications -->
+<div class="toast-wrap" id="toastWrap" aria-live="polite" aria-atomic="false"></div>
+
+<aside class="hitl-panel" id="hitlPanel" role="dialog" aria-modal="true" aria-labelledby="panelTitle" aria-hidden="true">
+  <div class="panel-header">
+    <div>
+      <div class="gate-badge" id="panelGateBadge">HITL-2</div>
+      <h3 id="panelTitle">Pre-Move Approval Required</h3>
+      <p id="panelSubtitle">run_BRT_2026-06-17 · Jun 17, 2026 · BRT Brampton</p>
+    </div>
+    <button class="panel-close" onclick="togglePanel()" aria-label="Close panel">✕</button>
+  </div>
+  <div class="panel-body" id="panelBody"></div>
+  <div class="panel-footer" id="panelFooter"></div>
+</aside>
+
+<script src="js/data.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
