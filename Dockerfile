@@ -37,8 +37,9 @@ WORKDIR /app/fleet-agents
 # Env defaults
 ENV PYTHONUTF8=1
 ENV PYTHONUNBUFFERED=1
-# Point SOTI MCP CWD to the container path (overrides the Windows path default in config.py)
+# Point MCP server CWDs to container paths (override the Windows path defaults in config.py)
 ENV SOTI_MCP_CWD=/app/soti_mcp_server
+ENV FLEET_MCP_CWD=/app/brampton_mcp_server
 
 # All secrets/flags injected at Container Apps Job runtime
 # e.g. USE_MOCK_SOTI, USE_MOCK_LLM, COSMOS_CONNECTION_STRING, etc.

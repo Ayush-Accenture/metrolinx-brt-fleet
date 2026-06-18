@@ -1,5 +1,0 @@
-# Azure Functions runtime
-azure-functions==1.21.3
-
-# Durable Functions extension for Python v2
-azure-functions-durable==1.2.9

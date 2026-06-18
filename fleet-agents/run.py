@@ -35,7 +35,9 @@ def main() -> None:
     )
     parser.add_argument(
         "run_id",
-        help="Unique run identifier, e.g. BRT-2026-06-16",
+        nargs="?",
+        default=None,
+        help="Unique run identifier, e.g. BRT-2026-06-16 (defaults to today's UTC date)",
     )
     parser.add_argument(
         "--auto",
@@ -48,6 +50,12 @@ def main() -> None:
         help="Print existing run state and continue (informational for Phase 1)",
     )
     args = parser.parse_args()
+
+    # Auto-generate run_id from today's UTC date if not supplied (scheduled container job)
+    if args.run_id is None:
+        from datetime import datetime, timezone
+        args.run_id = f"BRT-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}"
+        logging.getLogger(__name__).info("run_id auto-generated: %s", args.run_id)
 
     # --auto overrides env; safe because it only affects HITL prompts
     if args.auto:
