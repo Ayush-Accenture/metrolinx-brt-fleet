@@ -280,6 +280,15 @@ class SotiClient:
             json_body=parent_path,
         )
 
+    async def rename_device(self, device_id: str, new_name: str) -> Any:
+        """PUT /api/devices/{deviceId} — rename a device (update DeviceName field).
+        Used to add LTM_ prefix (Prod→LTM) or strip it (LTM→Prod)."""
+        return await self._request(
+            "PUT",
+            f"/devices/{device_id}",
+            json_body={"DeviceName": new_name},
+        )
+
     # Device groups
     async def get_last_known_location(self, reference_id: str) -> Any:
         """GET /api/devicegroups/referenceId:{referenceId}/members/lastKnownLocation"""

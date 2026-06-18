@@ -150,6 +150,66 @@ function ReconSection({ payload }: { payload: PendingGate['payload'] }) {
   )
 }
 
+// ── LLM Insights Panel ────────────────────────────────────────────────────
+
+const INSIGHT_STEPS: { stepKey: string; field: string; label: string; colour: string }[] = [
+  { stepKey: 'stage2_parse',        field: 'summary',              label: 'Parse Summary',          colour: 'blue'   },
+  { stepKey: 'stage3_approval',     field: 'post_decision_summary', label: 'Pre-Move Approval',      colour: 'indigo' },
+  { stepKey: 'stage5_reconcile',    field: 'summary',              label: 'Reconciliation Summary',  colour: 'teal'   },
+  { stepKey: 'stage5_reconcile',    field: 'exception_triage',     label: 'Exception Triage',        colour: 'rose'   },
+  { stepKey: 'stage6_post_hitl3',   field: 'post_decision_summary', label: 'Post-Validation',        colour: 'violet' },
+  { stepKey: 'stage6_validation',   field: 'run_summary',          label: 'Final Run Summary',       colour: 'green'  },
+]
+
+const COLOUR_CLASSES: Record<string, string> = {
+  blue:   'bg-blue-50   border-blue-200   text-blue-800',
+  indigo: 'bg-indigo-50 border-indigo-200 text-indigo-800',
+  teal:   'bg-teal-50   border-teal-200   text-teal-800',
+  rose:   'bg-rose-50   border-rose-200   text-rose-800',
+  violet: 'bg-violet-50 border-violet-200 text-violet-800',
+  green:  'bg-green-50  border-green-200  text-green-800',
+}
+
+/** Render markdown bold (**text**) as <strong> */
+function renderMarkdown(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/)
+  return parts.map((p, i) =>
+    p.startsWith('**') && p.endsWith('**')
+      ? <strong key={i}>{p.slice(2, -2)}</strong>
+      : p
+  )
+}
+
+function LLMInsights({ steps }: { steps: RunDoc['steps'] }) {
+  const insights: { label: string; text: string; colour: string }[] = []
+
+  for (const cfg of INSIGHT_STEPS) {
+    const step = steps.find(s => s.step === cfg.stepKey)
+    const text = step?.output?.[cfg.field] as string | undefined
+    if (text && text.trim() && !text.startsWith('[MOCK]')) {
+      insights.push({ label: cfg.label, text, colour: cfg.colour })
+    }
+  }
+
+  if (insights.length === 0) return (
+    <p className="text-sm text-slate-400 italic">No AI write-ups generated yet — they appear as each stage completes.</p>
+  )
+
+  return (
+    <div className="space-y-3">
+      {insights.map((ins, i) => (
+        <div key={i} className={`rounded-lg border px-4 py-3 ${COLOUR_CLASSES[ins.colour]}`}>
+          <div className="flex items-center gap-2 mb-1.5">
+            <span className="text-base">🤖</span>
+            <span className="text-xs font-bold uppercase tracking-wide opacity-70">{ins.label}</span>
+          </div>
+          <p className="text-sm leading-relaxed">{renderMarkdown(ins.text)}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 // ── Section Panel (collapsible within the card) ────────────────────────────
 
 function Section({ title, badge, defaultOpen = false, children }: {
@@ -350,6 +410,11 @@ export default function RunCard({ run, expanded, onToggle, onDecisionSubmit }: P
               <WorkbookViewer tabs={workbook} />
             </Section>
           )}
+
+          {/* ── AI Insights ── */}
+          <Section title="AI Insights" badge="🤖 LLM Write-ups" defaultOpen={true}>
+            <LLMInsights steps={run.steps} />
+          </Section>
 
           {/* ── Approvals ── */}
           {approvals.length > 0 && (

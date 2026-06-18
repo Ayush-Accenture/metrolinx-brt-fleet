@@ -1,0 +1,29 @@
+# Virtual environments
+**/.venv/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+
+# Runtime output — NOT baked in
+fleet-agents/output/
+fleet-agents/output
+fleet-agents/state/
+fleet-agents/state
+
+# Local secrets
+**/.env
+!**/.env.example
+
+# Ops portal — NOT needed in pipeline container
+ops-dashboard-portal/
+
+# Old/unused code
+fleet-phase1/
+HITL-and-Cosmos-state-capture/
+
+# Git
+.git/
+
+# Misc
+*.log
+.DS_Store

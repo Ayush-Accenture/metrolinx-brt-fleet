@@ -65,6 +65,18 @@ _SOTI_FOLDER_FIELDS = (
 )
 
 
+def _folder_category(folder: str) -> str:
+    """Map a SOTI folder path to 'Production', 'LTM', or 'Unknown'."""
+    if not folder or folder == "UNKNOWN":
+        return "Unknown"
+    f = folder.lower()
+    if "ltm" in f:
+        return "LTM"
+    if "production" in f:
+        return "Production"
+    return "Unknown"
+
+
 def _extract_soti_folder(device_info: dict, device_name: str) -> str:
     """
     Extract the current folder/group path from a SOTI device response dict.
@@ -214,9 +226,14 @@ class Orchestrator:
                 log.warning("Run aborted at schema gate | run_id=%s", self.run_id)
                 return
 
+        # Send a compact summary to the LLM — sending all 1000+ rows exceeds TPM limits.
+        # The narrator only needs counts + a representative sample to produce a useful summary.
+        sample_moves = [m.model_dump() for m in intended_moves[:10]]
         parser_summary = self.parser_narrator.narrate({
-            "intended_moves": [m.model_dump() for m in intended_moves],
-            "schema_issues": schema_issues,
+            "total_moves": len(intended_moves),
+            "schema_issue_count": len(schema_issues),
+            "schema_issues_sample": schema_issues[:5],
+            "sample_moves": sample_moves,
         })
 
         self._transition("PLANNED", "stage2_parse",
@@ -245,66 +262,99 @@ class Orchestrator:
         log.info("Stage 2b — bulk SOTI lookup: %d devices fetched in %dms",
                  len(device_lookup), lookup_ms)
 
-        unknown_count = 0
         for move in intended_moves:
             device_info = self.soti.get_device_from_lookup(device_lookup, move.current_device)
             current_folder = _extract_soti_folder(device_info, move.current_device)
 
-            # ── Stale LTM tag detection ────────────────────────────────────
-            if current_folder == "UNKNOWN" and move.target_folder == "Production":
-                _ltm_name = f"LTM_{move.current_device}"
-                _ltm_info = self.soti.get_device_from_lookup(device_lookup, _ltm_name)
-                if _ltm_info:
-                    _ltm_folder = _extract_soti_folder(_ltm_info, _ltm_name)
-                    move.stale_ltm_tag = True
-                    move.current_soti_folder = (
-                        f"\u26a0 STALE LTM TAG (found as {_ltm_name} in {_ltm_folder})"
-                    )
-                    move.current_device = _ltm_name
-                    current_folder = move.current_soti_folder
-                    log.warning(
-                        "Stage 2b \u2014 STALE LTM TAG: bus %s found as %s in SOTI folder '%s'",
-                        move.bus_number, _ltm_name, _ltm_folder,
-                    )
+            # ── Check if device exists under LTM_ prefix ──────────────────
+            # A device moving Prod→LTM would already have LTM_ if previously renamed.
+            # A device moving LTM→Prod was renamed LTM_BRT_* when it went to LTM.
+            ltm_device_name = f"LTM_{move.current_device}"
+            ltm_device_info = self.soti.get_device_from_lookup(device_lookup, ltm_device_name)
+            ltm_folder = _extract_soti_folder(ltm_device_info, ltm_device_name) if ltm_device_info else "UNKNOWN"
 
-            if move.current_soti_folder is None:
+            # ── Classify per truth table ───────────────────────────────────
+            target = move.target_folder  # "Production" or "LTM"
+            current_cat = _folder_category(current_folder)
+            ltm_cat     = _folder_category(ltm_folder)
+
+            if device_info and current_cat == "Production" and target == "Production":
+                move.classification   = "MATCHED_PRODUCTION"
+                move.execution_status = "SKIPPED"
                 move.current_soti_folder = current_folder
 
-            if current_folder == "UNKNOWN":
-                unknown_count += 1
-            log.info("Stage 2b \u2014 %s current SOTI folder: %s",
-                     move.current_device, move.current_soti_folder)
+            elif device_info and current_cat == "LTM" and target == "LTM":
+                move.classification   = "MATCHED_LTM"
+                move.execution_status = "SKIPPED"
+                move.current_soti_folder = current_folder
+
+            elif device_info and current_cat == "Production" and target == "LTM":
+                move.classification   = "NEEDS_MOVE_TO_LTM"
+                move.execution_status = "PENDING"
+                move.current_soti_folder = current_folder
+
+            elif (device_info and current_cat == "LTM" and target == "Production") or \
+                 (ltm_device_info and ltm_cat == "LTM" and target == "Production"):
+                # Device is in LTM (possibly already renamed with LTM_ prefix)
+                move.classification   = "NEEDS_MOVE_TO_PRODUCTION"
+                move.execution_status = "PENDING"
+                if ltm_device_info and not device_info:
+                    # Device was already renamed LTM_BRT_* — update current_device
+                    move.stale_ltm_tag   = True
+                    move.current_device  = ltm_device_name
+                    move.current_soti_folder = ltm_folder
+                    log.warning("Stage 2b — STALE LTM TAG: bus %s found as %s",
+                                move.bus_number, ltm_device_name)
+                else:
+                    move.current_soti_folder = current_folder
+
+            else:
+                move.classification   = "NOT_FOUND"
+                move.execution_status = "BLOCKED"
+                move.block_reason     = (
+                    f"Device '{move.current_device}' not found in SOTI "
+                    f"(also checked '{ltm_device_name}')"
+                )
+                move.current_soti_folder = "UNKNOWN"
+
+            log.info("Stage 2b — %s → target=%s | current=%s | class=%s [%s]",
+                     move.current_device, target,
+                     move.current_soti_folder, move.classification, move.execution_status)
+
+        # ── Summarise classifications ─────────────────────────────────────
+        pending_count   = sum(1 for m in intended_moves if m.execution_status == "PENDING")
+        skipped_count   = sum(1 for m in intended_moves if m.execution_status == "SKIPPED")
+        blocked_count   = sum(1 for m in intended_moves if m.execution_status == "BLOCKED")
+        stale_devices   = [
+            {"device": m.current_device, "bus": m.bus_number, "soti_folder": m.current_soti_folder}
+            for m in intended_moves if m.stale_ltm_tag
+        ]
+        blocked_devices = [
+            {"device": m.current_device, "bus": m.bus_number, "reason": m.block_reason}
+            for m in intended_moves if m.execution_status == "BLOCKED"
+        ]
 
         # ── Exception triage (LLM) — only when something looks off ───────────
         triage_2b = ""
-        stale_devices = [
-            {"device": m.current_device, "bus": m.bus_number,
-             "soti_folder": m.current_soti_folder}
-            for m in intended_moves if m.stale_ltm_tag
-        ]
-        if unknown_count or stale_devices:
+        if blocked_count or stale_devices:
             log.warning(
-                "Stage 2b — %d/%d devices not found in SOTI bulk response. "
-                "Check that device names in the DVA match the DeviceName field in SOTI.",
-                unknown_count, len(intended_moves),
+                "Stage 2b — %d PENDING | %d SKIPPED | %d BLOCKED | %d stale-LTM",
+                pending_count, skipped_count, blocked_count, len(stale_devices),
             )
-            unknown_devices = [
-                {"device": m.current_device, "bus": m.bus_number}
-                for m in intended_moves if m.current_soti_folder == "UNKNOWN"
-            ]
             triage_2b = self.exception_triage.narrate({
                 "stage": "stage2b_enrich",
-                "unknown": unknown_devices,
+                "blocked": blocked_devices,
                 "stale_ltm": stale_devices,
             })
             log.info("Stage 2b triage: %s", triage_2b)
 
         append_step(self.run_doc, "stage2b_enrich", "DONE",
-                    {"enriched": len(intended_moves), "unknown": unknown_count,
+                    {"enriched":  len(intended_moves),
+                     "pending":   pending_count,
+                     "skipped":   skipped_count,
+                     "blocked":   blocked_count,
                      "stale_ltm": len(stale_devices),
                      "exception_triage": triage_2b,
-                     # Persist the enriched move list so the portal (move table,
-                     # Q&A agent) has it even after the HITL-2 pending file is gone.
                      "intended_moves": [m.model_dump() for m in intended_moves]})
         save_run_doc(self.run_doc)
 
@@ -341,14 +391,14 @@ class Orchestrator:
             indices = prompt_subset_selection(intended_moves)
             approved_moves = [intended_moves[i] for i in indices]
 
-        # Post-HITL-2 narrator: LLM responds to the human's approval decision
+        # Post-HITL-2 narrator: compact summary only — avoid TPM limits
         post_approval_summary = self.parser_narrator.narrate({
             "event": "post_hitl2_decision",
             "decision": decision,
             "approved_count": len(approved_moves),
             "total_count": len(intended_moves),
-            "approved_moves": [m.model_dump() for m in approved_moves],
             "excluded_count": len(intended_moves) - len(approved_moves),
+            "sample_approved": [m.model_dump() for m in approved_moves[:5]],
         })
         log.info("Post-HITL-2 LLM: %s", post_approval_summary)
 
@@ -360,15 +410,26 @@ class Orchestrator:
         save_run_doc(self.run_doc)
 
         # ── Stage 4: Execute moves via Fleet Movement MCP (brampton.py) ─────
-        # brampton.py calls SOTI REST API directly — not via SOTI MCP.
-        # This is the only code path that moves devices in SOTI MobiControl.
+        # Only PENDING moves (NEEDS_MOVE_TO_LTM / NEEDS_MOVE_TO_PRODUCTION) are sent.
+        # SKIPPED moves are already correct; BLOCKED moves cannot be executed.
         self._transition("MOVING", "stage4_execute")
+
+        pending_moves = [m for m in approved_moves if m.execution_status == "PENDING"]
+        skipped_moves = [m for m in approved_moves if m.execution_status == "SKIPPED"]
+        blocked_moves = [m for m in approved_moves if m.execution_status == "BLOCKED"]
+        log.info(
+            "Stage 4 — executing %d PENDING moves | %d SKIPPED | %d BLOCKED",
+            len(pending_moves), len(skipped_moves), len(blocked_moves),
+        )
+        if blocked_moves:
+            log.warning("Stage 4 — BLOCKED devices (will not be moved): %s",
+                        [m.current_device for m in blocked_moves])
 
         t0 = time.monotonic()
         try:
             fleet_result = await self.fleet.run_fleet_movement(
                 run_id=self.run_id,
-                intended_moves=[m.model_dump() for m in approved_moves],
+                intended_moves=[m.model_dump() for m in pending_moves],
                 mode="LIVE",
             )
         except Exception as _exc:
@@ -400,7 +461,7 @@ class Orchestrator:
             # Retry once on operator request
             fleet_result = await self.fleet.run_fleet_movement(
                 run_id=self.run_id,
-                intended_moves=[m.model_dump() for m in approved_moves],
+                intended_moves=[m.model_dump() for m in pending_moves],
                 mode="LIVE",
             )
 
@@ -458,10 +519,14 @@ class Orchestrator:
                 reason=exc_item.get("reason", ""),
             )
 
+        # Recon narrator: send counts + small sample only — avoid TPM limits
         recon_result.summary_text = self.recon_narrator.narrate({
-            "moved": recon_result.moved,
-            "unmoved": recon_result.unmoved,
-            "unidentified": recon_result.unidentified,
+            "moved_count": len(recon_result.moved),
+            "unmoved_count": len(recon_result.unmoved),
+            "unidentified_count": len(recon_result.unidentified),
+            "sample_moved": recon_result.moved[:5],
+            "sample_unmoved": recon_result.unmoved[:5],
+            "sample_unidentified": recon_result.unidentified[:5],
         })
 
         # Exception triage (LLM): classify probable cause for reconciliation residuals
@@ -469,8 +534,10 @@ class Orchestrator:
         if recon_result.unmoved or recon_result.unidentified:
             recon_triage = self.exception_triage.narrate({
                 "stage": "stage5_reconcile",
-                "unmoved": recon_result.unmoved,
-                "unidentified": recon_result.unidentified,
+                "unmoved_count": len(recon_result.unmoved),
+                "unidentified_count": len(recon_result.unidentified),
+                "sample_unmoved": recon_result.unmoved[:5],
+                "sample_unidentified": recon_result.unidentified[:5],
             })
             log.info("Stage 5 triage: %s", recon_triage)
 
@@ -511,15 +578,15 @@ class Orchestrator:
             log.warning("Rerun requested by L2 | run_id=%s", self.run_id)
             return
 
-        # Post-HITL-3 narrator: LLM responds to the human's validation decision
+        # Post-HITL-3 narrator: compact summary only — avoid TPM limits
         post_validation_summary = self.recon_narrator.narrate({
             "event": "post_hitl3_decision",
             "decision": decision,
             "moved_count": len(recon_result.moved),
             "unmoved_count": len(recon_result.unmoved),
             "unidentified_count": len(recon_result.unidentified),
-            "unmoved": recon_result.unmoved,
-            "unidentified": recon_result.unidentified,
+            "sample_unmoved": recon_result.unmoved[:5],
+            "sample_unidentified": recon_result.unidentified[:5],
         })
         log.info("Post-HITL-3 LLM: %s", post_validation_summary)
         append_step(self.run_doc, "stage6_post_hitl3", "DONE",
@@ -528,11 +595,14 @@ class Orchestrator:
 
         # ── Stage 7: Complete ───────────────────────────────────────────────────
         # Run summary (LLM): stakeholder summary email composed from run results.
+        # Run summary narrator: compact — avoid TPM limits
         run_summary = self.summary_narrator.narrate({
             "run_id": self.run_id,
-            "moved": recon_result.moved,
-            "unmoved": recon_result.unmoved,
-            "unidentified": recon_result.unidentified,
+            "moved_count": len(recon_result.moved),
+            "unmoved_count": len(recon_result.unmoved),
+            "unidentified_count": len(recon_result.unidentified),
+            "sample_moved": recon_result.moved[:5],
+            "sample_unmoved": recon_result.unmoved[:5],
         })
         log.info("Run summary:\n%s", run_summary)
 

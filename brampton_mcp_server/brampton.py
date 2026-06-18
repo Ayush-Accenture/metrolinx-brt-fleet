@@ -203,6 +203,18 @@ async def _move_device(http: httpx.AsyncClient, device_id: str, parent_path: str
         raise
 
 
+async def _rename_device(http: httpx.AsyncClient, device_id: str, new_name: str) -> dict:
+    """PUT /api/devices/{deviceId} — update DeviceName (add/strip LTM_ prefix)."""
+    try:
+        return await _soti_request(
+            http, "PUT", f"/devices/{device_id}",
+            json={"DeviceName": new_name},
+        )
+    except Exception as exc:
+        logger.error("SOTI rename_device(%s → %s) failed: %s", device_id, new_name, exc)
+        raise
+
+
 # ── Core fleet movement logic ────────────────────────────────────────────────
 
 async def run_fleet_movement(
@@ -286,7 +298,7 @@ async def run_fleet_movement(
 
                 current_folder = _extract_folder(device_info)
 
-                # Step 2 — move device
+                # Step 2 — move device to target folder
                 try:
                     await _move_device(http, device_id, target_folder)
                 except Exception as exc:
@@ -298,17 +310,35 @@ async def run_fleet_movement(
                     })
                     continue
 
-                # Step 3 — immediate verify: read back actual folder
-                # Re-fetch the single device info after move via group path search
+                # Step 3 — rename device to reflect LTM_ prefix convention
+                # Prod→LTM: add LTM_ prefix  (BRT_DCU_1587_1 → LTM_BRT_DCU_1587_1)
+                # LTM→Prod: strip LTM_ prefix (LTM_BRT_DCU_1587_1 → BRT_DCU_1587_1)
+                renamed_to = device_name
+                if target_folder.upper() == "LTM" and not device_name.upper().startswith("LTM_"):
+                    renamed_to = f"LTM_{device_name}"
+                elif target_folder.upper() == "PRODUCTION" and device_name.upper().startswith("LTM_"):
+                    renamed_to = device_name[4:]  # strip "LTM_"
+
+                if renamed_to != device_name:
+                    try:
+                        await _rename_device(http, device_id, renamed_to)
+                        logger.info("Renamed device %s → %s", device_name, renamed_to)
+                    except Exception as exc:
+                        logger.warning("Rename %s → %s failed (non-fatal): %s",
+                                       device_name, renamed_to, exc)
+                        renamed_to = device_name  # keep original name in result
+
+                # Step 4 — immediate verify: read back actual folder
                 post_info = _lookup_device(device_lookup, device_name)
                 actual_folder = _extract_folder(post_info)
 
                 if actual_folder.lower() == target_folder.lower():
                     moved.append({
-                        "device":      device_name,
-                        "bus_number":  bus_number,
-                        "from_folder": current_folder,
-                        "to_folder":   actual_folder,
+                        "device":       device_name,
+                        "device_final": renamed_to,
+                        "bus_number":   bus_number,
+                        "from_folder":  current_folder,
+                        "to_folder":    actual_folder,
                     })
                 else:
                     unmoved.append({

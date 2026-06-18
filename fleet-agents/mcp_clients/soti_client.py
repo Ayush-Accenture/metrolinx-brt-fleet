@@ -257,6 +257,21 @@ class SotiMcpClient:
             return []
         return data if isinstance(data, list) else data.get("devices", [])
 
+    async def rename_device(self, device_id: str, new_name: str) -> dict:
+        """
+        Rename a device in SOTI MobiControl.
+        Used to add/strip the LTM_ prefix when moving between Production and LTM.
+        Real tool: rename_device (PUT /api/devices/{deviceId} with {DeviceName: new_name})
+        """
+        if self._use_mock:
+            return {"device_id": device_id, "new_name": new_name, "success": True, "mock": True}
+        result = await self.session.call_tool(
+            "rename_device", {"device_id": device_id, "new_name": new_name}
+        )
+        text = result.content[0].text if result.content else ""
+        data = _safe_parse(text) or {}
+        return {"device_id": device_id, "new_name": new_name, "success": True, "response": data}
+
     async def disconnect(self) -> None:
         """Close MCP transport cleanly; safe to call even if never connected."""
         if self.session is not None:
@@ -287,24 +302,40 @@ class SotiMcpClient:
     def _mock_device_lookup(self) -> dict[str, dict]:
         """Return a mock lookup dict with all BRT devices pre-populated.
 
-        Uses the same naming convention as cosmos_client / excel_parser so that
-        mock runs produce realistic Moved/Failed rows instead of all-Unidentified.
+        Uses the same per-type suffix convention as cosmos_client / excel_parser:
+          DCU  → BRT_DCU_{bus}{SOTI_DCU_SUFFIX}
+          BFTP → BRT_BFTP_{bus}{SOTI_BFTP_SUFFIX}
+        Also pre-populates LTM_ variants so Stage 2b classification works correctly.
         """
         lookup = {}
         digits = config.SOTI_BUS_DIGITS
-        suffix = config.SOTI_DEVICE_SUFFIX
+        suffixes = {"DCU": config.SOTI_DCU_SUFFIX, "BFTP": config.SOTI_BFTP_SUFFIX}
         for bus_num in range(601, 2600):
             bus_str = str(bus_num).zfill(digits)
-            for dev_type in ("DCU", "BFTP"):
+            for dev_type, suffix in suffixes.items():
                 device_name = f"BRT_{dev_type}_{bus_str}{suffix}"
                 lookup[device_name.lower()] = {
                     "id":     f"device-id-{device_name}",
                     "folder": "Production",
                     "raw": {
                         "DeviceName": device_name,
-                        "folder": "Production",
-                        "status": "online",
-                        "mock": True,
+                        "DeviceId":   f"device-id-{device_name}",
+                        "folder":     "Production",
+                        "status":     "online",
+                        "mock":       True,
+                    }
+                }
+                # Pre-populate LTM variant so stale-LTM detection works in mock mode
+                ltm_name = f"LTM_{device_name}"
+                lookup[ltm_name.lower()] = {
+                    "id":     f"device-id-{ltm_name}",
+                    "folder": "LTM",
+                    "raw": {
+                        "DeviceName": ltm_name,
+                        "DeviceId":   f"device-id-{ltm_name}",
+                        "folder":     "LTM",
+                        "status":     "online",
+                        "mock":       True,
                     }
                 }
         return lookup

@@ -212,14 +212,12 @@ def parse_dva(file_path: str) -> Tuple[list[IntendedMove], list[dict]]:
                 )
                 continue
 
-            # Derive device names from bus number.
-            # Naming format is configurable via SOTI_BUS_DIGITS and SOTI_DEVICE_SUFFIX:
-            #   Production SOTI: BRT_DCU_{bus:04d}_1  (SOTI_BUS_DIGITS=4, SOTI_DEVICE_SUFFIX=_1)
-            #   Test SOTI:       BRT_DCU_{bus:05d}    (SOTI_BUS_DIGITS=5, SOTI_DEVICE_SUFFIX=)
+            # Derive device names from bus number using per-type suffix convention:
+            #   DCU:  BRT_DCU_{bus:04d}_1   (SOTI_DCU_SUFFIX=_1)
+            #   BFTP: BRT_BFTP_{bus:04d}_2  (SOTI_BFTP_SUFFIX=_2)
             bus_padded  = bus.lstrip("0").zfill(config.SOTI_BUS_DIGITS) if bus.isdigit() else bus
-            suffix      = config.SOTI_DEVICE_SUFFIX
-            dcu_device  = f"BRT_DCU_{bus_padded}{suffix}"
-            bftp_device = f"BRT_BFTP_{bus_padded}{suffix}"
+            dcu_device  = f"BRT_DCU_{bus_padded}{config.SOTI_DCU_SUFFIX}"
+            bftp_device = f"BRT_BFTP_{bus_padded}{config.SOTI_BFTP_SUFFIX}"
 
             target = _infer_target(status)
             if target is None:
@@ -234,6 +232,7 @@ def parse_dva(file_path: str) -> Tuple[list[IntendedMove], list[dict]]:
                 intended_moves.append(IntendedMove(
                     bus_number=bus,
                     current_device=device,
+                    device_type=dev_type,  # type: ignore[arg-type]
                     target_folder=target,  # type: ignore[arg-type]
                     vehicle_status=status,
                     reason=f"[{dev_type}] Status '{status}' maps to {target}",

@@ -2,18 +2,38 @@
 from typing import Literal, Optional
 from pydantic import BaseModel
 
+# Classification values per the Imran Khan truth table (2026-06-17)
+MoveClassification = Literal[
+    "MATCHED_PRODUCTION",       # DVA=Prod, SOTI=Prod   → SKIPPED
+    "MATCHED_LTM",              # DVA=LTM,  SOTI=LTM    → SKIPPED
+    "NEEDS_MOVE_TO_PRODUCTION", # DVA=Prod, SOTI=LTM    → PENDING
+    "NEEDS_MOVE_TO_LTM",        # DVA=LTM,  SOTI=Prod   → PENDING
+    "NOT_FOUND",                # device absent in SOTI  → BLOCKED
+    "MULTIPLE_MATCHES",         # >1 device of same type → BLOCKED
+    "SOTI_ERROR",               # SOTI call failed       → BLOCKED
+]
+
+ExecutionStatus = Literal["SKIPPED", "PENDING", "BLOCKED"]
+
 
 class IntendedMove(BaseModel):
     """A single device movement derived deterministically from the DVA Excel."""
 
     bus_number: str
-    current_device: str
+    current_device: str                          # SOTI device name (may have LTM_ prefix)
+    device_type: Literal["DCU", "BFTP"] = "DCU" # device type within the bus
     target_folder: Literal["Production", "LTM"]
     vehicle_status: str
     reason: str
-    # Populated by Stage 2b (read-only SOTI query) before approval
+
+    # Populated by Stage 2b (read-only SOTI query before approval)
     current_soti_folder: Optional[str] = None
-    # Set True when Stage 2b finds the device registered as LTM_BRT_DCU_* in SOTI
-    # but the DVA says it should be in Production — indicates a stale LTM rename tag.
-    # current_device is updated to the LTM_ prefixed name so Stage 4 moves the right device.
+
+    # Classification result from truth table — set in Stage 2b
+    classification: Optional[MoveClassification] = None
+    execution_status: Optional[ExecutionStatus] = None
+    block_reason: Optional[str] = None          # human-readable reason for BLOCKED status
+
+    # Set True when Stage 2b finds the device registered as LTM_BRT_*
+    # but DVA says Production — current_device is updated to the LTM_ name.
     stale_ltm_tag: bool = False

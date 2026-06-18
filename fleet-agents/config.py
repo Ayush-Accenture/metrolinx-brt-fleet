@@ -69,11 +69,17 @@ USE_MOCK_COSMOS: bool = os.getenv("USE_MOCK_COSMOS", "true").lower() == "true"
 USE_MOCK_BLOB: bool = os.getenv("USE_MOCK_BLOB", "true").lower() == "true"
 
 # ── SOTI device naming convention ────────────────────────────────────────────
-# Production BRT devices: BRT_DCU_{bus:04d}_1  (4-digit bus, _1 suffix)
-# This test SOTI instance uses 5-digit sequential IDs with no suffix:
-#   BRT_DCU_00002   (set SOTI_BUS_DIGITS=5, SOTI_DEVICE_SUFFIX= to match)
+# Production BRT naming:
+#   BRT_DCU_{bus:04d}_1   → SOTI_BUS_DIGITS=4, SOTI_DCU_SUFFIX=_1
+#   BRT_BFTP_{bus:04d}_2  → SOTI_BUS_DIGITS=4, SOTI_BFTP_SUFFIX=_2
+# Test SOTI (5-digit sequential, no suffix):
+#   BRT_DCU_{bus:05d} / BRT_BFTP_{bus:05d} → SOTI_BUS_DIGITS=5, both suffixes empty
 SOTI_BUS_DIGITS: int   = int(os.getenv("SOTI_BUS_DIGITS", "4"))
-SOTI_DEVICE_SUFFIX: str = os.getenv("SOTI_DEVICE_SUFFIX", "_1")
+SOTI_DCU_SUFFIX: str   = os.getenv("SOTI_DCU_SUFFIX",  "_1")  # DCU devices
+SOTI_BFTP_SUFFIX: str  = os.getenv("SOTI_BFTP_SUFFIX", "_2")  # BFTP devices
+
+# Movable device types per agency — only these types participate in fleet moves
+MOVABLE_DEVICE_TYPES: dict[str, list[str]] = {"BRT": ["DCU", "BFTP"]}
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 STATE_DIR: str = os.getenv("STATE_DIR", "output")      # all outputs go here

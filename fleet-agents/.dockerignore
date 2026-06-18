@@ -1,0 +1,23 @@
+# Virtual environments
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Runtime output — NOT baked into the image
+output/
+output
+output/**
+state/
+state
+
+# Local secrets — injected at runtime via Container Apps Job env vars
+.env
+
+# Dev/debug files
+*.log
+.DS_Store
+
+# Sample/test data
+samples/

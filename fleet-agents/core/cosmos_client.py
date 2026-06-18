@@ -185,16 +185,18 @@ async def get_movements_from_db(run_id: str) -> list[IntendedMove]:
                 log.warning("Unrecognised vehicleStatus '%s' for bus %s — skipping", status, bus)
                 continue
 
-            # Derive device names using the same naming convention as excel_parser
-            bus_padded  = bus.lstrip("0").zfill(config.SOTI_BUS_DIGITS) if bus.isdigit() else bus
-            suffix      = config.SOTI_DEVICE_SUFFIX
+            # Derive device names using per-type suffix convention:
+            #   DCU:  BRT_DCU_{bus}_1  (SOTI_DCU_SUFFIX=_1)
+            #   BFTP: BRT_BFTP_{bus}_2 (SOTI_BFTP_SUFFIX=_2)
+            bus_padded = bus.lstrip("0").zfill(config.SOTI_BUS_DIGITS) if bus.isdigit() else bus
             for dev_type, device_name in (
-                ("DCU",  f"BRT_DCU_{bus_padded}{suffix}"),
-                ("BFTP", f"BRT_BFTP_{bus_padded}{suffix}"),
+                ("DCU",  f"BRT_DCU_{bus_padded}{config.SOTI_DCU_SUFFIX}"),
+                ("BFTP", f"BRT_BFTP_{bus_padded}{config.SOTI_BFTP_SUFFIX}"),
             ):
                 moves.append(IntendedMove(
                     bus_number=bus,
                     current_device=device_name,
+                    device_type=dev_type,  # type: ignore[arg-type]
                     target_folder=target,  # type: ignore[arg-type]
                     vehicle_status=status,
                     reason=f"[{dev_type}] Status '{status}' maps to {target} (from Cosmos DB)",

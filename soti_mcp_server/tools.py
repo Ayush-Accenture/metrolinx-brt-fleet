@@ -193,6 +193,16 @@ TOOL_DEFINITIONS: list[types.Tool] = [
         },
         required=["mac_address", "parent_path"],
     ),
+
+    _tool(
+        name="rename_device",
+        description="PUT /api/devices/{deviceId} – rename a device by updating its DeviceName. Used to add LTM_ prefix when moving Prod→LTM, or strip it when moving LTM→Prod.",
+        properties={
+            "device_id": {"type": "string", "description": "The unique device identifier."},
+            "new_name":  {"type": "string", "description": "The new device name (e.g. LTM_BRT_DCU_1587_1 or BRT_DCU_1587_1)."},
+        },
+        required=["device_id", "new_name"],
+    ),
 ]
 
 # Handler implementations
@@ -256,6 +266,9 @@ async def _move_device_by_id(client: SotiClient, args: dict) -> Any:
 async def _move_device_by_mac(client: SotiClient, args: dict) -> Any:
     return await client.move_device_by_mac(args["mac_address"], args["parent_path"])
 
+async def _rename_device(client: SotiClient, args: dict) -> Any:
+    return await client.rename_device(args["device_id"], args["new_name"])
+
 # Dispatch map  {tool_name: handler_function}
 TOOL_HANDLERS: dict[str, Handler] = {
     "get_token_api":                               _get_token_api,
@@ -275,4 +288,5 @@ TOOL_HANDLERS: dict[str, Handler] = {
     "delete_device":                               _delete_device,
     "move_device_by_id":                           _move_device_by_id,
     "move_device_by_mac":                          _move_device_by_mac,
+    "rename_device":                               _rename_device,
 }
