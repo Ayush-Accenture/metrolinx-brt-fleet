@@ -38,6 +38,30 @@ async def create_device_monitoring_sr(
 
 
 @mcp.tool()
+async def list_catalog_items(name_filter: str = "") -> dict:
+    """List active Service Catalog items from this SNOW instance.
+
+    Use this to discover the right catalog item name or sys_id when
+    SNOW_CATALOG_ITEM_NAME / SNOW_CATALOG_ITEM_SYS_ID are unknown.
+
+    Args:
+        name_filter: Optional partial name to filter results (e.g. "monitoring").
+                     Leave empty to return all active catalog items (up to 30).
+
+    Returns a dict with:
+        count  — number of items found
+        items  — list of {sys_id, name, short_description, category}
+        hint   — how to use the result to configure .env
+    """
+    items = await snow_client.list_catalog_items(name_filter)
+    hint = (
+        "Set SNOW_CATALOG_ITEM_SYS_ID=<sys_id> in .env to use a specific item, "
+        "or set SNOW_CATALOG_ITEM_NAME=<name> for partial-match auto-discovery."
+    )
+    return {"count": len(items), "items": items, "hint": hint}
+
+
+@mcp.tool()
 async def get_sr_status(record_number: str) -> dict:
     """Get the status of a ServiceNow SR (REQ...) or RITM (RITM...).
 

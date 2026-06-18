@@ -275,17 +275,17 @@ def prompt_sr_requestor(
         )
 
     console.print(Panel(
-        f"[bold cyan]ServiceNow SR — Requestor Identity[/bold cyan]\n\n"
-        f"The value below will be set as the [yellow]requested_for[/yellow] field "
-        f"in ServiceNow and recorded in fleet.xlsx.\n\n"
+        f"[bold cyan]ServiceNow SR — Requestor Name[/bold cyan]\n\n"
+        f"This name is recorded in the [yellow]fleet.xlsx Details[/yellow] cell "
+        f"(e.g. 'Requestor Name - Likhitha Reddy Bandi').\n\n"
         f"Default (from env) : [yellow]{default_requestor or '(not set)'}[/yellow]\n\n"
-        f"Enter the SNOW username or display name of the requestor, "
+        f"Enter the display name of the person requesting this SR, "
         f"or press Enter to keep the default.",
         title="[HITL-SR] Requestor",
         border_style="cyan",
     ))
     value = Prompt.ask(
-        "[bold]Requestor name / username[/bold]",
+        "[bold]Requestor display name[/bold]",
         default=default_requestor or "",
     )
     return value.strip() or default_requestor
