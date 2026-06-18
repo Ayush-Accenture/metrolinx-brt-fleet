@@ -11,7 +11,9 @@ async def create_device_monitoring_sr(
     short_description: str,
     description: str,
 ) -> dict:
-    """Create a Service Request and linked RITM in ServiceNow.
+    """Create a Service Request in ServiceNow via the Service Catalog.
+
+    Returns the REQ, RITM, and SCTASK numbers created.
 
     Args:
         short_description: One-line summary for the SR.
@@ -21,7 +23,10 @@ async def create_device_monitoring_sr(
     return {
         "success": True,
         **result,
-        "message": f"Created {result['sr_number']} / {result['ritm_number']}",
+        "message": (
+            f"Created {result['sr_number']} / {result['ritm_number']}"
+            + (f" / {result['sctask_number']}" if result.get("sctask_number") else "")
+        ),
     }
 
 

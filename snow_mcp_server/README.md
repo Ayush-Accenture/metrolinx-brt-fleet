@@ -4,9 +4,9 @@ MCP server that raises the **Ad-hoc "Device Monitoring" Service Request** for th
 Fleet Movement flow, and looks up SR/RITM status. Built with FastMCP over the
 ServiceNow Service Catalog + Table APIs.
 
-> Owner: Somnath (SNOW MCP layer). This is the integrated copy in the fleet repo.
-> The `.py` logic is unchanged from what Somnath delivered — only docs/helpers
-> (`README.md`, `.env.example`, `check_access.py`) were added around it.
+> Owner: Somnath (SNOW MCP layer). This is the integrated copy in the fleet repo,
+> alongside `soti_mcp_server/`. The `.py` logic is unchanged from Somnath's delivery —
+> only docs/helpers (`README.md`, `.env.example`, `check_access.py`) were added around it.
 
 ---
 
@@ -18,7 +18,7 @@ Everything is in place **except one value**: the Service Catalog item sys_id.
 2. `python check_access.py`  → should print `HTTP 200 ... OK`.
 3. `python server.py`        → starts the MCP server.
 
-That's it. Steps below have the detail, plus 3 things to confirm with the SNOW admin.
+That's it.
 
 ---
 
@@ -27,7 +27,7 @@ That's it. Steps below have the detail, plus 3 things to confirm with the SNOW a
 | File | What it is |
 |------|------------|
 | `server.py` | FastMCP server — exposes 2 tools (Somnath's code, unchanged) |
-| `snow_client.py` | ServiceNow REST client — order catalog item + read records (unchanged) |
+| `snow_client.py` | ServiceNow REST client — catalog order + record reads (unchanged) |
 | `requirements.txt` | `fastmcp`, `httpx`, `python-dotenv` |
 | `.env.example` | Template for credentials + the catalog sys_id |
 | `check_access.py` | **Read-only** connectivity/auth check (safe to run anytime) |
@@ -36,7 +36,7 @@ That's it. Steps below have the detail, plus 3 things to confirm with the SNOW a
 
 | Tool | Purpose |
 |------|---------|
-| `create_device_monitoring_sr(short_description, description)` | Orders the catalog item → creates REQ + RITM, returns their numbers |
+| `create_device_monitoring_sr(short_description, description)` | Orders the catalog item → creates **REQ + RITM + SCTASK**, returns all three numbers |
 | `get_sr_status(record_number)` | Looks up a `REQ...` or `RITM...` record |
 
 ## Setup
@@ -63,11 +63,21 @@ python server.py            # starts the MCP server
 
 ```
 create_device_monitoring_sr(short_description, description)
-   └─ POST {BASE}/now/v1/servicecatalog/items/{SNOW_CATALOG_ITEM_SYS_ID}/order_now
-        → ServiceNow creates  REQ  →  RITM  ( → SCTASK via the item's workflow )
-   └─ GET  {BASE}/now/table/sc_req_item?request={req_sys_id}   (fetches the RITM)
-   └─ returns { sr_number, sr_sys_id, ritm_number, ritm_sys_id }
+   ├─ resolve the catalog item's real variable names      (GET item, cached per session)
+   ├─ POST order_now   — auto-tries now/v1 → now/v2 → sn_sc  →  REQ
+   ├─ GET sc_req_item?request={req_sys_id}                   →  RITM
+   └─ GET sc_task?request_item={ritm_sys_id}                 →  SCTASK
+   returns { sr_number, ritm_number, sctask_number, sr_sys_id, ritm_sys_id, sctask_sys_id, variables_used }
 ```
+
+The earlier open questions are now **handled in code**:
+- **order_now namespace** — tries the three known variants and uses whichever responds.
+- **SCTASK number** — fetched in Step 4 (this is the number recorded in Fleet.xlsx).
+- **catalog variable names** — resolved from the item's metadata, with `short_description`/`description` defaults as fallback.
+
+Residual caveats (only verifiable once the sys_id is in and a real order runs):
+- assumes the catalog item's workflow actually generates an SCTASK under the RITM;
+- assumes one of the three namespace variants is enabled on the instance.
 
 ### Where `short_description` / `description` come from
 
@@ -88,19 +98,6 @@ List of BRT vehicles moved from PROD to LTM:
 ```
 
 (If there is no device movement, the orchestrator does not call this tool — per SOP, no SR.)
-
-## ⚠️ Confirm with the SNOW admin before relying on it end-to-end
-
-These don't block setup, but should be verified on the live instance:
-
-1. **Order endpoint namespace.** Code posts to `…/api/now/v1/servicecatalog/items/{id}/order_now`.
-   ServiceNow's documented Service Catalog API is usually `…/api/**sn_sc**/servicecatalog/items/{id}/order_now`.
-   If `order_now` returns 404, switch `now/v1` → `sn_sc` in `snow_client.py`.
-2. **SCTASK number.** The SOP records `SCTASK…` numbers in Fleet.xlsx, but this tool
-   returns the **REQ + RITM** only. If the SCTASK number is required, add one more read:
-   `GET {BASE}/now/table/sc_task?sysparm_query=request_item={ritm_sys_id}`.
-3. **Catalog variable names.** The order sends `variables: {short_description, description}`.
-   These must match the variable names defined on the "Device Monitoring" catalog item.
 
 ## Security
 
