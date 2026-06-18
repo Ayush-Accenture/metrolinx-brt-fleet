@@ -76,6 +76,11 @@ STATE_DIR: str = os.getenv("STATE_DIR", "output")      # all outputs go here
 OUTPUT_DIR: str = STATE_DIR                             # alias used by new code
 SAMPLE_DVA: str = os.getenv("SAMPLE_DVA", "samples/sample_dva.xlsx")
 
+# ── ServiceNow defaults (mirrored from snow_mcp_server/.env) ────────────────
+# Used by the HITL requestor prompt as a pre-filled default.
+# The operator can override the value at runtime; it is passed to SNOW API.
+SNOW_REQUESTED_FOR: str = os.getenv("SNOW_REQUESTED_FOR", "")
+
 # ── Ops Dashboard Portal ─────────────────────────────────────────────────────
 # Set USE_WEB_HITL=true to route HITL gates through the web portal instead of
 # the console. The portal must be running at OPS_PORTAL_URL.
@@ -85,8 +90,12 @@ OPS_PORTAL_URL: str = os.getenv("OPS_PORTAL_URL", "http://localhost:8080")
 # ── Azure Blob Storage (optional key for local dev without RBAC) ─────────────
 # Set AZURE_STORAGE_ACCOUNT_KEY in .env for local dev when Storage Blob Data
 # Reader role is not assigned. Leave empty to use AzureCliCredential instead.
+AZURE_STORAGE_ACCOUNT_NAME: str = os.getenv(
+    "AZURE_STORAGE_ACCOUNT_NAME", "agenticaidashboardsa"
+)
+AZURE_STORAGE_CONTAINER_NAME: str = os.getenv("AZURE_STORAGE_CONTAINER_NAME", "fmi")
 AZURE_STORAGE_ACCOUNT_KEY: str = os.getenv("AZURE_STORAGE_ACCOUNT_KEY", "")
-# SAS token for container-level read access (sp=r). When set, takes priority
-# over AzureCliCredential and account key. Generate via Azure portal or CLI.
-# Format: ?sp=r&st=...&se=...&sig=...
+# SAS token URL for container-level access. When set, takes priority over
+# AzureCliCredential and account key. Generate via Azure portal or CLI.
+# Format: https://<account>.blob.core.windows.net/<container>?sp=racw&...
 AZURE_STORAGE_SAS_URL: str = os.getenv("AZURE_STORAGE_SAS_URL", "")

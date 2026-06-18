@@ -39,6 +39,7 @@ class SnowClient:
         run_id: str,
         short_description: str,
         description: str,
+        requestor_name: str = "",
     ) -> dict:
         """
         Create a Device Monitoring SR in ServiceNow.
@@ -47,20 +48,22 @@ class SnowClient:
             run_id: BRT run identifier (e.g., "BRT-2026-06-18")
             short_description: SR short description
             description: Full SR description/notes
+            requestor_name: Optional SNOW username/sys_id entered by the L2 operator
+                            at the HITL gate.  Overrides SNOW_REQUESTED_FOR env default.
 
         Returns:
-            dict with keys:
-                - sr_number: ServiceNow request number (e.g., "REQ0123456")
-                - sr_sys_id: ServiceNow sys_id
-                - ritm_number: Request Item number (e.g., "RITM0123456")
-                - ritm_sys_id: Request Item sys_id
+            dict with sr_number, sr_sys_id, ritm_number, ritm_sys_id, sctask_number
         """
         try:
             # Import here to allow lazy loading
             from snow_client import create_sr
 
-            logger.info("Creating SNOW SR for run_id=%s", run_id)
-            result = await create_sr(short_description, description)
+            logger.info("Creating SNOW SR for run_id=%s requestor=%s", run_id, requestor_name or "<env default>")
+            result = await create_sr(
+                short_description,
+                description,
+                requested_for=requestor_name or None,
+            )
             logger.info(
                 "SNOW SR created: sr_number=%s ritm_number=%s",
                 result.get("sr_number"),

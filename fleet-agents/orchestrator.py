@@ -44,7 +44,9 @@ from tools.hitl_console import (
     prompt_schema_fix,
     prompt_subset_selection,
     prompt_hitl_error,
+    prompt_sr_requestor,
 )
+from tools.sr_tracker import record_sr_result
 
 log = logging.getLogger(__name__)
 
@@ -568,8 +570,20 @@ class Orchestrator:
                  len(recon_result.moved), len(recon_result.unmoved),
                  len(recon_result.unidentified))
 
+        # ── Stage 7 pre-step: collect requestor identity at HITL gate ────────
+        requestor_name = prompt_sr_requestor(
+            run_id=self.run_id,
+            default_requestor=config.SNOW_REQUESTED_FOR,
+        )
+        log.info("Stage 7 requestor confirmed: %s", requestor_name or "<env default>")
+
         # ── Stage 7: Create Device Monitoring SR in ServiceNow ────────────────
         self._transition("DRAFTING_SR", "stage7_create_sr")
+
+        # Pre-initialise so stage7b always has values regardless of SR success/failure
+        sr_sys_id = ""
+        ritm_number = ""
+        sctask_number = ""
 
         try:
             sr_short_desc = f"Device Monitoring SR for BRT Fleet Movement {self.run_id}"
@@ -586,27 +600,31 @@ class Orchestrator:
                 run_id=self.run_id,
                 short_description=sr_short_desc,
                 description=sr_description,
+                requestor_name=requestor_name,
             )
             sr_duration_ms = int((time.monotonic() - t0) * 1000)
 
-            sr_number = sr_result.get("sr_number", "UNKNOWN")
-            sr_sys_id = sr_result.get("sr_sys_id", "")
-            ritm_number = sr_result.get("ritm_number", "")
+            sr_number     = sr_result.get("sr_number", "UNKNOWN")
+            sr_sys_id     = sr_result.get("sr_sys_id", "")
+            ritm_number   = sr_result.get("ritm_number", "")
+            sctask_number = sr_result.get("sctask_number", "")
 
             append_tool_call(
                 self.run_doc, "snow.create_device_monitoring_sr",
-                {"run_id": self.run_id, "moved": len(recon_result.moved)},
-                {"sr_number": sr_number, "ritm_number": ritm_number},
+                {"run_id": self.run_id, "moved": len(recon_result.moved), "requestor": requestor_name},
+                {"sr_number": sr_number, "ritm_number": ritm_number, "sctask_number": sctask_number},
                 sr_duration_ms,
             )
             append_step(self.run_doc, "stage7_create_sr", "DONE", {
-                "sr_number": sr_number,
-                "sr_sys_id": sr_sys_id,
-                "ritm_number": ritm_number,
+                "sr_number":     sr_number,
+                "sr_sys_id":     sr_sys_id,
+                "ritm_number":   ritm_number,
+                "sctask_number": sctask_number,
+                "requestor":     requestor_name,
             })
             log.info(
-                "Stage 7 complete — SNOW SR created: sr_number=%s ritm_number=%s",
-                sr_number, ritm_number,
+                "Stage 7 complete — SNOW SR created: sr_number=%s ritm_number=%s sctask=%s",
+                sr_number, ritm_number, sctask_number,
             )
         except Exception as sr_exc:
             sr_err = str(sr_exc)
@@ -620,6 +638,31 @@ class Orchestrator:
             sr_number = f"SR-ERROR-{self.run_id}"
 
         save_run_doc(self.run_doc)
+
+        # ── Stage 7b: Record SR result → fleet.xlsx + result.json + blob ─────
+        try:
+            tracker_out = record_sr_result(
+                run_id=self.run_id,
+                sr_number=sr_number,
+                ritm_number=ritm_number,
+                sr_sys_id=sr_sys_id,
+                sctask_number=sctask_number,
+                recon_result=recon_result,
+                output_workbook_path=output_wb_path,
+                requestor_name=requestor_name,
+                run_summary=recon_result.summary_text,
+            )
+            append_step(self.run_doc, "stage7b_sr_tracking", "DONE", tracker_out)
+            save_run_doc(self.run_doc)
+            log.info(
+                "Stage 7b complete — fleet.xlsx updated, result.json written | run_id=%s",
+                self.run_id,
+            )
+        except Exception as track_exc:
+            log.error("Stage 7b — SR tracking failed: %s", track_exc, exc_info=True)
+            append_step(self.run_doc, "stage7b_sr_tracking", "ERROR",
+                        {"error": str(track_exc)})
+            save_run_doc(self.run_doc)
 
         # ── Stage 6: HITL post-move validation ───────────────────────────────
         self._transition("AWAITING_VALIDATION", "stage6_hitl_validation")

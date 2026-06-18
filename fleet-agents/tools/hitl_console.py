@@ -248,6 +248,49 @@ def prompt_post_move_validation(
     return choice  # type: ignore[return-value]
 
 
+# ── HITL-SR: Requestor name before ServiceNow SR creation ────────────────────
+
+def prompt_sr_requestor(
+    run_id: str = "unknown",
+    default_requestor: str = "",
+) -> str:
+    """
+    Collect the requestor name/username before creating the ServiceNow SR.
+
+    The value returned is passed to SNOW as the 'requested_for' field and
+    embedded in the SR description and fleet.xlsx Details cell.
+
+    In mock mode the default is returned unchanged.
+    """
+    if config.USE_MOCK_HITL:
+        return _auto("HITL-SR requestor", default_requestor or "MOCK_REQUESTOR")
+
+    if config.USE_WEB_HITL:
+        # Web HITL returns the requestor as a free-text decision string
+        return _web_hitl(
+            "HITL-SR-Requestor",
+            run_id,
+            {"default_requestor": default_requestor},
+            default_requestor,
+        )
+
+    console.print(Panel(
+        f"[bold cyan]ServiceNow SR — Requestor Identity[/bold cyan]\n\n"
+        f"The value below will be set as the [yellow]requested_for[/yellow] field "
+        f"in ServiceNow and recorded in fleet.xlsx.\n\n"
+        f"Default (from env) : [yellow]{default_requestor or '(not set)'}[/yellow]\n\n"
+        f"Enter the SNOW username or display name of the requestor, "
+        f"or press Enter to keep the default.",
+        title="[HITL-SR] Requestor",
+        border_style="cyan",
+    ))
+    value = Prompt.ask(
+        "[bold]Requestor name / username[/bold]",
+        default=default_requestor or "",
+    )
+    return value.strip() or default_requestor
+
+
 # ── HITL-Error: Stage 4 SOTI move failure ─────────────────────────────────────
 
 def prompt_hitl_error(
