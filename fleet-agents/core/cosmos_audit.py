@@ -95,13 +95,15 @@ def mark_step_started(run_id: str, step: str) -> None:
     Mark a step as IN_PROGRESS, set startUtc, and increment attempts.
     Called at the beginning of each step (before work starts).
     Steps not in _STEP_META are silently skipped.
+    Uses a two-step approach: try arrayFilters update first; if steps[] array
+    doesn't exist or the entry is missing, push a new step object.
     """
     if step not in _STEP_META:
         return
     try:
         now = _ts()
-        _col().update_one(
-            {"_id": run_id},
+        result = _col().update_one(
+            {"_id": run_id, "steps.step": step},
             {
                 "$set": {
                     "steps.$[elem].status":   "IN_PROGRESS",
@@ -111,8 +113,25 @@ def mark_step_started(run_id: str, step: str) -> None:
                 "$inc": {"steps.$[elem].attempts": 1},
             },
             array_filters=[{"elem.step": step}],
-            upsert=True,
         )
+        if result.modified_count == 0:
+            # steps[] array missing or entry not present — push a new step object
+            _col().update_one(
+                {"_id": run_id},
+                {
+                    "$push": {"steps": {
+                        "step":     step,
+                        "seq":      _STEP_META[step]["seq"],
+                        "phase":    _STEP_META[step]["phase"],
+                        "status":   "IN_PROGRESS",
+                        "startUtc": now,
+                        "endUtc":   None,
+                        "attempts": 1,
+                    }},
+                    "$set": {"updatedUtc": now},
+                },
+                upsert=True,
+            )
         log.debug("cosmos_audit.mark_step_started: run=%s step=%s", run_id, step)
     except Exception:
         log.exception("cosmos_audit.mark_step_started failed (non-fatal): run=%s", run_id)
@@ -148,15 +167,34 @@ def upsert_run_state(run_id: str, state: str, step: str, extra: dict | None = No
                 else:
                     log.warning("cosmos_audit: ignoring non-dotted extra key '%s'", k)
 
-        update: dict = {"$set": set_fields}
-        kwargs: dict = {"upsert": True}
+        # Step 1: upsert top-level fields (state, currentStep, phase, etc.)
+        _col().update_one({"_id": run_id}, {"$set": set_fields}, upsert=True)
 
+        # Step 2: update steps[] entry if this step is tracked
         if step in _STEP_META:
-            set_fields[f"steps.$[elem].status"] = step_status
-            set_fields[f"steps.$[elem].endUtc"] = now
-            kwargs["array_filters"] = [{"elem.step": step}]
+            step_result = _col().update_one(
+                {"_id": run_id, "steps.step": step},
+                {"$set": {
+                    "steps.$[elem].status": step_status,
+                    "steps.$[elem].endUtc": now,
+                }},
+                array_filters=[{"elem.step": step}],
+            )
+            if step_result.modified_count == 0:
+                # steps[] missing or entry absent — push a new completed step object
+                _col().update_one(
+                    {"_id": run_id},
+                    {"$push": {"steps": {
+                        "step":     step,
+                        "seq":      _STEP_META[step]["seq"],
+                        "phase":    _STEP_META[step]["phase"],
+                        "status":   step_status,
+                        "startUtc": now,
+                        "endUtc":   now,
+                        "attempts": 1,
+                    }}},
+                )
 
-        _col().update_one({"_id": run_id}, update, **kwargs)
         log.debug("cosmos_audit.upsert_run_state: run=%s state=%s step=%s", run_id, state, step)
     except Exception:
         log.exception("cosmos_audit.upsert_run_state failed (non-fatal): run=%s", run_id)
