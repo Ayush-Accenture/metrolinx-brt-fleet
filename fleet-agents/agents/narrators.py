@@ -52,21 +52,32 @@ class _Base:
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
-        for attempt in range(4):
+        for attempt in range(6):
             try:
                 response = client.chat.completions.create(**kwargs)
                 return response.choices[0].message.content or ""
-            except RateLimitError:
+            except RateLimitError as exc:
                 import time
-                wait = 2 ** attempt  # 1s, 2s, 4s, 8s
-                log.warning("LLM rate limit (429) — waiting %ds before retry %d/4", wait, attempt + 1)
+                # Respect Retry-After header if present (Azure OpenAI always sends it)
+                retry_after = None
+                headers = getattr(getattr(exc, "response", None), "headers", None)
+                if headers:
+                    retry_after = headers.get("Retry-After") or headers.get("retry-after")
+                try:
+                    wait = int(retry_after) if retry_after else min(30 * (2 ** attempt), 300)
+                except (ValueError, TypeError):
+                    wait = min(30 * (2 ** attempt), 300)
+                log.warning(
+                    "LLM rate limit (429) — waiting %ds before retry %d/6 (Retry-After=%s)",
+                    wait, attempt + 1, retry_after,
+                )
                 time.sleep(wait)
             except BadRequestError as exc:
                 dropped = self._drop_unsupported_param(kwargs, exc)
                 if not dropped:
                     raise
                 log.warning("LLM param '%s' unsupported — retrying without it", dropped)
-        log.error("LLM rate limit persists after 4 retries — returning fallback narration")
+        log.error("LLM rate limit persists after 6 retries — returning fallback narration")
         return f"[{self.name}] LLM unavailable (rate limit) — narrative skipped."
 
     @staticmethod
