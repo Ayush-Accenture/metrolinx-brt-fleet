@@ -47,7 +47,7 @@ log = logging.getLogger(__name__)
 # ── Constants ────────────────────────────────────────────────────────────────
 BLOB_OUT_PREFIX = "out"
 FLEET_XLSX_NAME = "fleet.xlsx"
-FLEET_XLSX_BLOB_PATH = f"{BLOB_OUT_PREFIX}/{FLEET_XLSX_NAME}"
+FLEET_XLSX_BLOB_PATH = f"{BLOB_OUT_PREFIX}/BRT/{FLEET_XLSX_NAME}"
 SHEET_NAME = "BRT"
 
 _FLEET_COLUMNS = ["Date", "Task No.", "Details"]
