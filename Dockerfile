@@ -38,5 +38,4 @@ ENV SOTI_MCP_CWD=/app/soti_mcp_server
 # All secrets/flags injected at Container Apps Job runtime
 # e.g. USE_MOCK_SOTI, USE_MOCK_LLM, COSMOS_CONNECTION_STRING, etc.
 
-ENTRYPOINT ["python", "run.py"]
-CMD ["--help"]
+CMD ["python", "run.py"]
